@@ -1,11 +1,11 @@
-from setuptools import setup
+from setuptools import setup, find_packages
 
-setup(name='plotpal',
-      version='1.0.0',
-      description='A plugin for analyzing Dedalus simulations',
-      url='https://github.com/evanhanders/plotpal',
-      author='Evan Anders',
-      author_email='evan.anders@colorado.edu',
-      license='GPL-3.0',
-      packages=['plotpal'],
-      zip_safe=False)
+setup(
+    name='plotpal',
+    version='1.1.0',
+    description='A plugin for analyzing Dedalus simulations',
+    packages=find_packages(),
+    author='Evan Anders',
+    author_email='evanhanders@gmail.com',
+    url='https://github.com/evanhanders/plotpal',
+)
