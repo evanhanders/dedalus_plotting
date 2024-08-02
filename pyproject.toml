@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "plotpal"
+version = "1.1.0"
+description = "A plugin for analyzing Dedalus simulations"
+authors = [
+    { name = "Evan Anders", email = "evanhanders@gmail.com" }
+]
+dependencies = [
+    "docopt",
+    "h5py>=3.0.0",
+    "matplotlib",
+    "mpi4py>=2.0.0",
+    "numpy>=1.20.0",
+    "py",
+    "pytest",
+    "pytest-benchmark",
+    "pytest-cov",
+    "pytest-parallel",
+    "xarray",
+    "dedalus",
+    "pyvista>=0.38.5",
+    "cartopy",
+    "mypy"
+]
+requires-python = ">=3.9"
+license = { text = "GPL-3.0" }
+
+[project.urls]
+homepage = "https://github.com/evanhanders/plotpal"
+
+[project.optional-dependencies]
+dev = ["pytest", "pytest-benchmark", "pytest-cov", "pytest-parallel", "mypy"]

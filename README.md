@@ -3,18 +3,29 @@ Post-processing tools for plotting results from Dedalus simulations.
 The code in this repository is backed up on Zenodo, and is citeable at: [![DOI](https://zenodo.org/badge/265006663.svg)](https://zenodo.org/badge/latestdoi/265006663)
 
 # Installation
-To install plotpal on your local machine, navigate to the root plotpal/ directory (where setup.py is located), and type:
+To install plotpal on your local machine, first [ensure that you have openssl installed](https://chatgpt.com/share/a88a5b9f-83bd-42bc-a663-0806f9a48c7a) and then install Dedalus in a conda environment according to the instructions provided [in the dedalus docs](https://dedalus-project.readthedocs.io/en/latest/pages/installation.html). 
 
-> pip3 install -e .
+Check that your dedalus installation with ssl was successful by running the following:
 
-Note that plotpal is built on [matplotlib](https://matplotlib.org/), and uses some parallel functionality of [Dedalus](https://dedalus-project.org/). 
+```sh
+conda activate your-dedalus-environment
+python3
+>>> import ssl
+>>> import dedalus.public as d3
+```
 
-## Dependencies
-Plotpal relies on the full [Dedalus](https://dedalus-project.org/) stack (e.g., numpy, matplotlib, and dedalus itself) for full functionality.
+Then, follow the steps below:
 
-Some additional features also rely on:
-* Volumetric plotting requires [PyVista](https://docs.pyvista.org/version/stable/index.html) >= 0.38.5.
-* Orthographic projections require [CartoPy](https://scitools.org.uk/cartopy/docs/latest/).
+1. Clone the repository:
+    ```sh
+    git clone https://github.com/evanhanders/plotpal.git
+    cd plotpal
+    ```
+
+3. Install the package and dependencies:
+    ```sh
+    pip install --use-pep517 -e .
+    ```
 
 # Usage
 
