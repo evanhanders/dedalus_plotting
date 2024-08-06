@@ -1,23 +1,31 @@
 from collections import OrderedDict
 import logging
 from sys import stdout
+from typing import Optional, Union
 
 import numpy as np
-import h5py
+import h5py # type: ignore
 from mpi4py import MPI
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 matplotlib.rcParams.update({'font.size': 9})
 
+from dedalus.extras.flow_tools import GlobalArrayReducer # type: ignore
 from plotpal.file_reader import SingleTypeReader, match_basis
-from plotpal.plot_grid import RegularPlotGrid
-from dedalus.extras.flow_tools import GlobalArrayReducer
+from plotpal.plot_grid import RegularPlotGrid, PlotGrid
 
 logger = logging.getLogger(__name__.split('.')[-1])
 
-def save_dim_scale(dim, scale_group, task_name, scale_name, scale_data, dtype=np.float64):
-    """ Saves a dimension scale from a HDF5 task to a new HDF5 group """
+def save_dim_scale(
+        dim: h5py._hl.dims.DimensionProxy, 
+        scale_group: h5py.Group, 
+        task_name: str, 
+        scale_name: str, 
+        scale_data: np.ndarray, 
+        dtype: type = np.float64
+        ) -> None:
+    """ Saves a dimension scale from a HDF5 task to a different HDF5 group """
     full_scale_name = '{} - {}'.format(task_name, scale_name)
     scale_dset = scale_group.create_dataset(name=full_scale_name, shape=scale_data.shape, dtype=dtype)
     scale_dset[:] = scale_data
@@ -32,44 +40,65 @@ class AveragedProfilePlotter(SingleTypeReader):
     profiles to hdf5 files and plot them. 
     """
 
-    def __init__(self, *args, writes_per_avg=100, **kwargs):
+    def __init__(
+            self, 
+            run_dir: str, 
+            sub_dir: str, 
+            out_name: str, 
+            distribution: str = 'even-chunk',
+            num_files: Optional[int] = None, 
+            roll_writes: Optional[int] = None,
+            start_file: int = 1,
+            global_comm: MPI.Intracomm = MPI.COMM_WORLD,
+            chunk_size: int = 100
+            ):
         """ Initialize the AveragedProfilePlotter """
-        super().__init__(*args, chunk_size=writes_per_avg, distribution='even-chunk', **kwargs)
-        self.writes_per_avg = writes_per_avg
-        self.plots = []
-        self.tasks = []
-        self.averages = OrderedDict()
-        self.stored_averages = OrderedDict()
-        self.stored_bases = OrderedDict()
+        super().__init__(
+            run_dir = run_dir,
+            sub_dir = sub_dir,
+            out_name = out_name,
+            distribution = distribution,
+            num_files = num_files,
+            roll_writes = roll_writes,
+            start_file = start_file,
+            global_comm = global_comm,
+            chunk_size = chunk_size
+            )
+        self.writes_per_avg = chunk_size
+        self.plots: list[tuple[str, list[str], str, PlotGrid]] = []
+        self.tasks: list[str] = []
+        self.averages: dict[str, np.ndarray] = OrderedDict()
+        self.stored_averages: dict[str, list[tuple[np.ndarray, int, float, float]]] = OrderedDict()
+        self.stored_bases: dict[str, tuple[str, np.ndarray]] = OrderedDict()
 
-    def add_average_plot(self, x_basis=None, y_tasks=None, name=None, fig_height=3, fig_width=3):
+    def add_average_plot(
+            self, 
+            x_basis: str, 
+            y_tasks: Union[list[str], str], 
+            name: str, 
+            fig_height: float = 3, 
+            fig_width: float = 3
+            ) -> None:
         """ 
         Specifies a profile to average and plot. 
         
         Parameters
         ----------
-        x_basis : str
-            The basis that the profiles can be plotted against.
-        y_tasks : str or tuple of strs
-            A list of the tasks to plot.
-        name : str
-            The name of the plot file.
-        fig_height : float
-            The height of the figure in inches.
-        fig_width : float
-            The width of the figure in inches.
+        x_basis : The basis that the profiles can be plotted against.
+        y_tasks : A list of the tasks to plot.
+        name : The name of the plot file.
+        fig_height : The height of the figure in inches.
+        fig_width : The width of the figure in inches.
         """
-        if x_basis is None or y_tasks is None or name is None:
-            raise ValueError("Must specify x_basis (str), y_tasks (str or tuple of strs), and name (str)")
         if isinstance(y_tasks, str):
-            y_tasks = (y_tasks,)
+            y_tasks = [y_tasks,]
         self.plots.append((x_basis, y_tasks, name, RegularPlotGrid(num_rows=1, num_cols=1, col_inch=fig_width, row_inch=fig_height)))
         for task in y_tasks:
             if task not in self.tasks:
                 self.tasks.append(task)
                 self.stored_averages[task] = []
 
-    def plot_average_profiles(self, dpi=200, save_data=False):
+    def plot_average_profiles(self, dpi: int = 200, save_data: bool = False) -> None:
         """
         Plots the averaged profiles.
 
@@ -81,7 +110,7 @@ class AveragedProfilePlotter(SingleTypeReader):
             Whether to save the averaged profiles to hdf5 files.
         """
         local_count = 0
-        start_time = None
+        start_time = np.inf
         while self.writes_remain():
             dsets, ni = self.get_dsets(self.tasks)
             for task in self.tasks:
@@ -127,7 +156,7 @@ class AveragedProfilePlotter(SingleTypeReader):
         if save_data:
                 self.save_averaged_profiles()
 
-    def save_averaged_profiles(self):
+    def save_averaged_profiles(self) -> None:
         """ Saves the averaged profiles to hdf5 files. """
         reducer = GlobalArrayReducer(self.comm)
         save_data = OrderedDict()
@@ -143,9 +172,9 @@ class AveragedProfilePlotter(SingleTypeReader):
                 out_dts[wn-1] = end - start
             # broadcast and gather data on root node
             if self.comm.rank == 0:
-                reduced_data = np.zeros_like(out_data)
-                reduced_start_times = np.zeros_like(out_start_times)
-                reduced_dts = np.zeros_like(out_dts)
+                reduced_data: Optional[np.ndarray] = np.zeros_like(out_data)
+                reduced_start_times: Optional[np.ndarray] = np.zeros_like(out_start_times)
+                reduced_dts: Optional[np.ndarray] = np.zeros_like(out_dts)
             else:
                 reduced_data = reduced_start_times = reduced_dts = None
             self.comm.Reduce(out_data, reduced_data, op=MPI.SUM, root=0)
@@ -159,11 +188,15 @@ class AveragedProfilePlotter(SingleTypeReader):
                 scale_group = f.create_group('scales')
                 task_group = f.create_group('tasks')
                 for task in self.tasks:
-                    out_data, out_start_times, out_dts = save_data[task]
-                    dset = task_group.create_dataset(name=task, shape=out_data.shape, dtype=np.float64)
-                    dset[:] = out_data
+                    this_data, this_start_times, this_dts = save_data[task]
+                    assert isinstance(this_data, np.ndarray) \
+                        and isinstance(this_start_times, np.ndarray) \
+                        and isinstance(this_dts, np.ndarray), \
+                        "Data must be numpy arrays; communication error occurred."
+                    dset = task_group.create_dataset(name=task, shape=this_data.shape, dtype=np.float64)
+                    dset[:] = this_data
                     dset.dims[0].label = 't'
-                    for arr, sn in zip([out_start_times, out_dts], ['sim_time', 'avg_time']):
+                    for arr, sn in zip([this_start_times, this_dts], ['sim_time', 'avg_time']):
                         save_dim_scale(dset.dims[0], scale_group, task, sn, arr)
 
                     basis_name, basis = self.stored_bases[task]
