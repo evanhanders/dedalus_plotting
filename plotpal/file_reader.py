@@ -14,7 +14,7 @@ from dedalus.tools import post # type: ignore
 
 logger = logging.getLogger(__name__.split('.')[-1])
 
-def match_basis(dset: Union[h5py._hl.dataset.Dataset, "RolledDset"], basis: str) -> np.ndarray:
+def match_basis(dset: Union[h5py.Dataset, "RolledDset"], basis: str) -> np.ndarray:
     """ Returns a 1D numpy array of the requested basis given a Dedalus dataset and basis name (string). """
     for i in range(len(dset.dims)):
         if dset.dims[i].label == basis:
@@ -25,12 +25,12 @@ def match_basis(dset: Union[h5py._hl.dataset.Dataset, "RolledDset"], basis: str)
 class RolledDset:
     """ A wrapper for data which has been rolled in time to make it behave like a Dedalus dataset."""
 
-    def __init__(self, dset: h5py._hl.dataset.Dataset, ni: int, rolled_data: np.ndarray):
+    def __init__(self, dset: h5py.Dataset, ni: int, rolled_data: np.ndarray):
         self.dims = dset.dims
         self.ni = ni
         self.data = rolled_data
 
-    def __getitem__(self, ni: int) -> np.ndarray:
+    def __getitem__(self, ni: Union[int, tuple]) -> np.ndarray:
         if isinstance(ni, tuple) and ni[0] == self.ni:
             return self.data[ni[1:]]
         if ni == self.ni:
@@ -327,7 +327,7 @@ class SingleTypeReader():
         self.starts = self.reader.file_starts[sub_dir]
         self.counts = self.reader.file_counts[sub_dir]
         self.writes = np.sum(self.counts)
-        self.output: dict[str, Union[h5py._hl.dataset.Dataset, RolledDset]] = OrderedDict()
+        self.output: dict[str, Union[h5py.Dataset, RolledDset]] = OrderedDict()
 
         if not self.idle:
             file_num = []
@@ -383,7 +383,7 @@ class SingleTypeReader():
             self, 
             tasks: list[str], 
             verbose=True
-            ) -> tuple[dict[str, Union[h5py._hl.dataset.Dataset, RolledDset]], int]:
+            ) -> tuple[dict[str, Union[h5py.Dataset, RolledDset]], int]:
         """ Given a list of task strings, returns a dictionary of the associated datasets and the dset index of the current write. """
         if not self.idle:
             if self.comm.rank == 0 and verbose:
