@@ -1,82 +1,64 @@
+from dataclasses import dataclass
+from typing import Optional, Union, Any
+
+import matplotlib.collections
 import numpy as np
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
+import cartopy.crs as ccrs #type: ignore
+from cartopy.mpl.geoaxes import GeoAxes #type: ignore
 matplotlib.rcParams.update({'font.size': 9})
+import h5py #type: ignore
+from mpi4py import MPI
 
-from plotpal.file_reader import SingleTypeReader, match_basis
-from plotpal.plot_grid import RegularColorbarPlotGrid
-
+from plotpal.file_reader import SingleTypeReader, match_basis, RolledDset
+from plotpal.plot_grid import RegularColorbarPlotGrid, PlotGrid
 
 import logging
 logger = logging.getLogger(__name__.split('.')[-1])
 
 
+@dataclass
 class Colormesh:
     """ A struct containing information about a slice colormesh plot    """
 
-    def __init__(self, task, vector_ind=None, x_basis='x', y_basis='z', cmap='RdBu_r', label=None,
-                 remove_mean=False, remove_x_mean=False, divide_x_std=False, pos_def=False,
-                 vmin=None, vmax=None, log=False, cmap_exclusion=0.005,
-                 linked_cbar_cm=None, linked_profile_cm=None, transpose=False):
-        """
-        Initialize the object
-        
-        # Arguments
-        -----------
-        task (str) :
-            The profile task name
-        vector_ind (int) :
-            If not None, plot the vector component with this index. For use with d3 vector fields.
-        x_basis, y_basis (strs) :
-            The dedalus basis names that the profile spans in the x- and y- direction of the plot
-        label (str):
-            A text label for the colorbar
-        cmap  (str) :
-            The matplotlib colormap used to display the data
-        remove_mean (bool) :
-            If True, remove the mean value of the profile at each time
-        remove_x_mean (bool) :
-            If True, remove the mean value over the axis plotted in the x- direction
-        divide_x_std (bool) :
-            If True, divide the y-profile by the stdev over the x- direction
-        pos_def (bool) :
-            If True, profile is positive definite and colormap should span from max/min to zero.
-        vmin, vmax (floats) :
-            The minimum and maximum values of the colormap
-        log (bool) :
-            If True, plot the log of the profile
-        cmap_exclusion (float) :
-            The fraction of the colormap to exclude from the min/max values
-        linked_cbar_cm (Colormesh) :
-            A Colormesh object that this object shares a colorbar with
-        linked_profile_cm (Colormesh) :
-            A Colormesh object that this object shares a mean profile with
-        transpose (bool) :
-            If True, transpose the colormap when plotting; useful when x_basis has an index after y_basis in dedalus data.
-        """
-        self.task, self.vector_ind, self.x_basis, self.y_basis = task, vector_ind, x_basis, y_basis
-        self.remove_mean, self.remove_x_mean, self.divide_x_std = remove_mean, remove_x_mean, divide_x_std
-        self.cmap, self.label, self.cmap_exclusion = cmap, label, cmap_exclusion
-        self.pos_def, self.log = pos_def, log
-        self.vmax, self.vmin = vmax, vmin
-        self.linked_cbar_cm, self.linked_profile_cm = linked_cbar_cm, linked_profile_cm
-        self.transpose = transpose
+    # Positional Arguments
+    task: str  # The profile task name
 
-        self.first = True
-        self.xx, self.yy = None, None
-        self.color_plot = None
+    #Keyword arguments
+    vector_ind: Optional[int] = None # If not None, plot the vector component with this index. For use with d3 vector fields.
+    x_basis: str = 'x' # The dedalus basis name that the profile spans in the horizontal-direction of the plot
+    y_basis: str = 'z' # The dedalus basis name that the profile spans in the vertical-direction of the plot
+    cmap: str = 'RdBu_r'  # The matplotlib colormap name used to display the data
+    label: Optional[str] = None # A text label for the colorbar
+    remove_mean: bool = False # If True, remove the mean value of the profile at each time
+    remove_x_mean: bool = False # If True, remove the mean value over the axis plotted in the x- direction
+    divide_x_std: bool = False # If True, divide by the stdev over the x- direction
+    pos_def: bool = False # If True, field is positive definite and colormap should span from zero to max.
+    vmin: Optional[float] = None # The minimum value of the colormap
+    vmax: Optional[float] = None # The maximum value of the colormap
+    log: bool = False # If True, plot the log of the field
+    cmap_exclusion: float = 0.005 # The fraction of the colormap to exclude from the min/max values
+    linked_cbar_cm: Optional['Colormesh'] = None # A Colormesh object that this object shares a colorbar with
+    linked_profile_cm: Optional['Colormesh'] = None # A Colormesh object that this object shares a mean profile with
+    transpose: bool = False # If True, transpose the colormap when plotting; useful when x_basis has an index after y_basis in dedalus data.
+    first: bool = True # If True, this is the first time the plot is being made
+    xx: Optional[np.ndarray] = None # The x-coordinates for use in the pcolormesh call
+    yy: Optional[np.ndarray] = None # The y-coordinates for use in the pcolormesh call
+    color_plot: Optional[matplotlib.collections.QuadMesh] = None # The pcolormesh object for the plot
 
-    def _modify_field(self, field):
+
+    def _modify_field(self, field: np.ndarray) -> np.ndarray:
         """ Modify the colormap field before plotting; e.g., remove mean, etc. """
+
+        self.removed_mean: int = 0
+        self.divided_std: Union[np.ndarray, int] = 1
         if self.linked_profile_cm is not None:
             # Use the same mean and std as another Colormesh object if specified.
             self.removed_mean = self.linked_profile_cm.removed_mean
             self.divided_std = self.linked_profile_cm.divided_std
         else:
-            self.removed_mean = 0
-            self.divided_std = 1
-
 
             #Remove specified mean
             if self.remove_mean:
@@ -87,10 +69,11 @@ class Colormesh:
             #Scale field by the stdev to bring out low-amplitude dynamics.
             if self.divide_x_std:
                 self.divided_std = np.std(field, axis=0)
+                assert isinstance(self.divided_std, np.ndarray), "divide_x_std only works for 2D fields"
                 if type(self) == MeridionalColormesh or type(self) == PolarColormesh:
                     if self.r_pad[0] == 0:
                         #set interior 4% of points to have a smoothly varying std
-                        N = len(self.divided_std) // 10
+                        N = self.divided_std.shape[0] // 10
                         mean_val = np.mean(self.divided_std[:N])
                         bound_val = self.divided_std[N]
                         indx = np.arange(N)
@@ -104,7 +87,7 @@ class Colormesh:
 
         return field
 
-    def _get_minmax(self, field):
+    def _get_minmax(self, field: np.ndarray) -> tuple[float, float]:
         """ Get the min and max values of the specified field for the colormap """
         if self.linked_cbar_cm is not None:
             # Use the same min/max as another Colormesh object if specified.
@@ -115,9 +98,9 @@ class Colormesh:
                 #If the profile is positive definite, set the colormap to span from the max/min to zero.
                 vals = np.sort(vals)
                 if np.mean(vals) < 0:
-                    vmin, vmax = vals[int(self.cmap_exclusion*len(vals))], 0
+                    vmin, vmax = vals[int(self.cmap_exclusion*len(vals))], 0.
                 else:
-                    vmin, vmax = 0, vals[int((1-self.cmap_exclusion)*len(vals))]
+                    vmin, vmax = 0., vals[int((1-self.cmap_exclusion)*len(vals))]
             else:
                 #Otherwise, set the colormap to span from the +/- abs(max) values.
                 vals = np.sort(np.abs(vals))
@@ -131,15 +114,22 @@ class Colormesh:
 
             return vmin, vmax
 
-    def _get_pcolormesh_coordinates(self, dset):
+    def _get_pcolormesh_coordinates(self, dset: Union[h5py.Dataset, RolledDset] ) -> None:
         """ make the x and y coordinates for pcolormesh """
         x = match_basis(dset, self.x_basis)
         y = match_basis(dset, self.y_basis)
         self.yy, self.xx = np.meshgrid(y, x)
 
-    def _setup_colorbar(self, plot, cax, vmin, vmax):
+    def _setup_colorbar(
+            self, 
+            plot: matplotlib.collections.QuadMesh, 
+            cax: matplotlib.axes.Axes, 
+            vmin: float, 
+            vmax: float
+            ) -> matplotlib.colorbar.Colorbar:
         """ Create the colorbar on the axis 'cax' and label it """
         cb = plt.colorbar(plot, cax=cax, orientation='horizontal')
+        assert cb.solids is not None, "cb.solids must be a matplotlib.collections.QuadMesh"
         cb.solids.set_rasterized(True)
         cb.set_ticks(())
         cax.text(-0.01, 0.5, r'$_{{{:.2e}}}^{{{:.2e}}}$'.format(vmin, vmax), transform=cax.transAxes, ha='right', va='center')
@@ -153,22 +143,24 @@ class Colormesh:
                 cax.text(1.05, 0.5, '{:s}'.format(self.label), transform=cax.transAxes, va='center', ha='left')
         return cb
 
-    def plot_colormesh(self, ax, cax, dset, ni, **kwargs):
+    def plot_colormesh(
+            self, 
+            ax: matplotlib.axes.Axes, 
+            cax: matplotlib.axes.Axes, 
+            dset: Union[h5py.Dataset, RolledDset],
+            ni: int, 
+            mpl_kwargs: dict[str, Any] = {}
+            ) -> tuple[matplotlib.collections.QuadMesh, matplotlib.colorbar.Colorbar]:
         """ 
         Plot the colormesh
         
         Parameters
         ----------
-        ax : matplotlib axis
-            The axis to plot the colormesh on.
-        cax : matplotlib axis
-            The axis to plot the colorbar on.
-        dset : hdf5 dataset
-            The dataset to plot.
-        ni : int
-            The index of the time step to plot.
-        **kwargs : dict
-            Additional keyword arguments to pass to matplotlib.pyplot.pcolormesh.
+        ax : The axis to plot the colormesh on.
+        cax : The axis to plot the colorbar on.
+        dset : The dataset to plot.
+        ni : The index of the time step to plot.
+        mpl_kwargs : Additional keyword arguments to pass to matplotlib.pyplot.pcolormesh.
         """
         if self.first:
             self._get_pcolormesh_coordinates(dset)
@@ -182,14 +174,15 @@ class Colormesh:
         vmin, vmax = self._get_minmax(field)
         self.current_vmin, self.current_vmax = vmin, vmax
 
-        if 'rasterized' not in kwargs.keys():
-            kwargs['rasterized'] = True
-        if 'shading' not in kwargs.keys():
-            kwargs['shading'] = 'nearest'
+        if 'rasterized' not in mpl_kwargs.keys():
+            mpl_kwargs['rasterized'] = True
+        if 'shading' not in mpl_kwargs.keys():
+            mpl_kwargs['shading'] = 'nearest'
 
         if self.transpose:
             field = field.T
-        self.color_plot = ax.pcolormesh(self.xx, self.yy, field.real, cmap=self.cmap, vmin=vmin, vmax=vmax, **kwargs)
+        assert self.xx is not None and self.yy is not None, "xx and yy must be set before plotting"
+        self.color_plot = ax.pcolormesh(self.xx, self.yy, field.real, cmap=self.cmap, vmin=vmin, vmax=vmax, **mpl_kwargs)
         cb = self._setup_colorbar(self.color_plot, cax, vmin, vmax)
         self.first = False
         return self.color_plot, cb
@@ -198,41 +191,56 @@ class Colormesh:
 class CartesianColormesh(Colormesh):
      """ Colormesh logic specific to Cartesian coordinates """
 
-     def plot_colormesh(self, ax, cax, dset, ni, **kwargs):
-        plot, cb = super().plot_colormesh(ax, cax, dset, ni, **kwargs)
+     def plot_colormesh(
+            self, 
+            ax: matplotlib.axes.Axes, 
+            cax: matplotlib.axes.Axes, 
+            dset: Union[h5py.Dataset, RolledDset],
+            ni: int, 
+            mpl_kwargs: dict[str, Any] = {}
+            ) -> tuple[matplotlib.collections.QuadMesh, matplotlib.colorbar.Colorbar]:
+        plot, cb = super().plot_colormesh(ax, cax, dset, ni, **mpl_kwargs)
         ax.set_xticks([])
         ax.set_yticks([])
         return plot, cb
 
 
+@dataclass
 class PolarColormesh(Colormesh):
-    """ Colormesh logic specific to polar coordinates or equatorial slices in spherical coordinates """
+    """Colormesh logic specific to polar coordinates or equatorial slices in spherical coordinates"""
 
-    def __init__(self, field, azimuth_basis='phi', radial_basis='r', r_inner=None, r_outer=None, **kwargs):
-        super().__init__(field, x_basis=azimuth_basis, y_basis=radial_basis, **kwargs)
-        self.radial_basis = self.y_basis
-        self.azimuth_basis = self.x_basis
-        if r_inner is None:
-            r_inner = 0
-        if r_outer is None:
-            r_outer = 1
-        self.r_pad = (r_inner, r_outer)
+    radial_basis: str = 'r'
+    azimuth_basis: str = 'phi'
+    r_inner: float = 0
+    r_outer: float = 1
 
-    def _modify_field(self, field):
+    def __post_init__(self):
+        self.x_basis = self.azimuth_basis
+        self.y_basis = self.radial_basis
+        self.r_pad = (self.r_inner, self.r_outer)
+
+    def _modify_field(self, field: np.ndarray) -> np.ndarray:
         field = super()._modify_field(field)
         field = np.pad(field, ((0, 1), (1, 1)), mode='edge')
         field[-1,:] = field[0,:] #set 2pi value == 0 value.
         return field
 
-    def _get_pcolormesh_coordinates(self, dset):
+    def _get_pcolormesh_coordinates(self, dset: Union[h5py.Dataset, RolledDset]) -> None:
         x = phi = match_basis(dset, self.azimuth_basis)
         y = r   = match_basis(dset, self.radial_basis)
         phi = np.append(x, 2*np.pi)
         r = np.pad(r, ((1,1)), mode='constant', constant_values=self.r_pad)
         self.yy, self.xx = np.meshgrid(r, phi)
 
-    def plot_colormesh(self, ax, cax, dset, ni, **kwargs):
-        plot, cb = super().plot_colormesh(ax, cax, dset, ni, **kwargs)
+    def plot_colormesh(
+            self, 
+            ax: matplotlib.axes.Axes, 
+            cax: matplotlib.axes.Axes, 
+            dset: Union[h5py.Dataset, RolledDset],
+            ni: int, 
+            mpl_kwargs: dict[str, Any] = {}
+            ) -> tuple[matplotlib.collections.QuadMesh, matplotlib.colorbar.Colorbar]:
+        plot, cb = super().plot_colormesh(ax, cax, dset, ni, **mpl_kwargs)
         ax.set_xticks([])
         ax.set_yticks([])
         ax.set_ylim(0, self.r_pad[1])
@@ -243,20 +251,29 @@ class PolarColormesh(Colormesh):
 class MollweideColormesh(Colormesh):
     """ Colormesh logic specific to Mollweide projections of S2 coordinates """
 
-    def __init__(self, field, azimuth_basis='phi', colatitude_basis='theta', **kwargs):
-        super().__init__(field, x_basis=azimuth_basis, y_basis=colatitude_basis, **kwargs)
-        self.colatitude_basis = self.y_basis
-        self.azimuth_basis = self.x_basis
+    colatitude_basis: str = 'theta'
+    azimuth_basis: str = 'phi'
 
-    def _get_pcolormesh_coordinates(self, dset):
+    def __post_init__(self):
+        self.x_basis = self.azimuth_basis
+        self.y_basis = self.colatitude_basis
+
+    def _get_pcolormesh_coordinates(self, dset: Union[h5py.Dataset, RolledDset]) -> None:
         x = phi = match_basis(dset, self.azimuth_basis)
         y = theta = match_basis(dset, self.colatitude_basis)
         phi -= np.pi
         theta = np.pi/2 - theta
         self.yy, self.xx = np.meshgrid(theta, phi)
 
-    def plot_colormesh(self, ax, cax, dset, ni, **kwargs):
-        plot, cb = super().plot_colormesh(ax, cax, dset, ni, **kwargs)
+    def plot_colormesh(
+            self,
+            ax: matplotlib.axes.Axes, 
+            cax: matplotlib.axes.Axes, 
+            dset: Union[h5py.Dataset, RolledDset],
+            ni: int, 
+            mpl_kwargs: dict[str, Any] = {}
+            ) -> tuple[matplotlib.collections.QuadMesh, matplotlib.colorbar.Colorbar]:
+        plot, cb = super().plot_colormesh(ax, cax, dset, ni, **mpl_kwargs)
         ax.yaxis.set_major_locator(plt.NullLocator())
         ax.xaxis.set_major_formatter(plt.NullFormatter())
         return plot, cb
@@ -265,27 +282,36 @@ class MollweideColormesh(Colormesh):
 class OrthographicColormesh(Colormesh):
     """ Colormesh logic specific to Orthographic projections of S2 coordinates """
 
-    def __init__(self, field, azimuth_basis='phi', colatitude_basis='theta', **kwargs):
-        super().__init__(field, x_basis=azimuth_basis, y_basis=colatitude_basis, **kwargs)
-        self.colatitude_basis = self.y_basis
-        self.azimuth_basis = self.x_basis
+   
+    colatitude_basis: str = 'theta'
+    azimuth_basis: str = 'phi'
+
+    def __post_init__(self):
+        self.x_basis = self.azimuth_basis
+        self.y_basis = self.colatitude_basis
         try:
-            import cartopy.crs as ccrs
             self.transform = ccrs.PlateCarree()
         except:
             raise ImportError("Cartopy must be installed for plotpal Orthographic plots")
 
-    def _get_pcolormesh_coordinates(self, dset):
-        x = phi = match_basis(dset, self.azimuth_basis)
-        y = theta = match_basis(dset, self.colatitude_basis)
+    def _get_pcolormesh_coordinates(self, dset: Union[h5py.Dataset, RolledDset]) -> None:
+        phi = match_basis(dset, self.azimuth_basis)
+        theta = match_basis(dset, self.colatitude_basis)
         phi *= 180/np.pi
         theta *= 180/np.pi
         phi -= 180
         theta -= 90
         self.yy, self.xx = np.meshgrid(theta, phi)
 
-    def plot_colormesh(self, ax, cax, dset, ni, **kwargs):
-        plot, cb = super().plot_colormesh(ax, cax, dset, ni, transform = self.transform, **kwargs)
+    def plot_colormesh(
+            self,
+            ax: GeoAxes, 
+            cax: matplotlib.axes.Axes, 
+            dset: Union[h5py.Dataset, RolledDset],
+            ni: int, 
+            mpl_kwargs: dict[str, Any] = {}
+            ) -> tuple[matplotlib.collections.QuadMesh, matplotlib.colorbar.Colorbar]:
+        plot, cb = super().plot_colormesh(ax, cax, dset, ni, **mpl_kwargs)
         ax.gridlines()
         return plot, cb
 
@@ -293,25 +319,25 @@ class OrthographicColormesh(Colormesh):
 class MeridionalColormesh(Colormesh):
     """ Colormesh logic specific to meridional slices in spherical coordinates """
 
-    def __init__(self, field, colatitude_basis='theta', radial_basis='r', r_inner=None, r_outer=None, left=False, **kwargs):
-        super().__init__(field, x_basis=colatitude_basis, y_basis=radial_basis, **kwargs)
-        self.radial_basis = self.y_basis
-        self.colatitude_basis = self.x_basis
-        if r_inner is None:
-            r_inner = 0
-        if r_outer is None:
-            r_outer = 1
-        self.r_pad = (r_inner, r_outer)
-        self.left = left
+    radial_basis: str = 'r'
+    colatitude_basis: str = 'theta'
+    r_inner: float = 0
+    r_outer: float = 1
+    left : bool = False
 
-    def _modify_field(self, field):
+    def __post_init__(self):
+        self.x_basis = self.colatitude_basis
+        self.y_basis = self.radial_basis
+        self.r_pad = (self.r_inner, self.r_outer)
+
+    def _modify_field(self, field: np.ndarray) -> np.ndarray:
         field = super()._modify_field(field)
         field = np.pad(field, ((1, 1), (1, 1)), mode='edge')
         return field
 
-    def _get_pcolormesh_coordinates(self, dset):
-        x = theta = match_basis(dset, self.colatitude_basis)
-        y = r     = match_basis(dset, self.radial_basis)
+    def _get_pcolormesh_coordinates(self, dset: Union[h5py.Dataset, RolledDset]) -> None:
+        theta = match_basis(dset, self.colatitude_basis)
+        r     = match_basis(dset, self.radial_basis)
         theta = np.pad(theta, ((1,1)), mode='constant', constant_values=(np.pi,0))
         if self.left:
             theta = np.pi/2 + theta
@@ -321,8 +347,15 @@ class MeridionalColormesh(Colormesh):
         r = np.pad(r, ((1,1)), mode='constant', constant_values=self.r_pad)
         self.yy, self.xx = np.meshgrid(r, theta)
 
-    def plot_colormesh(self, ax, cax, dset, ni, **kwargs):
-        plot, cb = super().plot_colormesh(ax, cax, dset, ni, **kwargs)
+    def plot_colormesh(
+            self,
+            ax: matplotlib.axes.Axes, 
+            cax: matplotlib.axes.Axes, 
+            dset: Union[h5py.Dataset, RolledDset],
+            ni: int, 
+            mpl_kwargs: dict[str, Any] = {}
+            ) -> tuple[matplotlib.collections.QuadMesh, matplotlib.colorbar.Colorbar]:
+        plot, cb = super().plot_colormesh(ax, cax, dset, ni, **mpl_kwargs)
         ax.set_xticks([])
         ax.set_yticks([])
         ax.set_ylim(0, self.r_pad[1])
@@ -335,113 +368,185 @@ class SlicePlotter(SingleTypeReader):
     A class for plotting colormeshes of 2D slices of dedalus data.
     """
 
-    def __init__(self, *args, **kwargs):
+    def __init__(
+            self, 
+            run_dir: str, 
+            sub_dir: str, 
+            out_name: str, 
+            distribution: str = 'even-write',
+            num_files: Optional[int] = None, 
+            roll_writes: Optional[int] = None,
+            start_file: int = 1,
+            global_comm: MPI.Intracomm = MPI.COMM_WORLD,
+            chunk_size: int = 1000
+            ):
         """
         Initializes the slice plotter.
         """
-        self.grid = None
-        super(SlicePlotter, self).__init__(*args, distribution='even-write', **kwargs)
+        self.grid: Optional[PlotGrid] = None
+        super(SlicePlotter, self).__init__(
+            run_dir,
+            distribution=distribution,
+            sub_dir=sub_dir,
+            out_name=out_name,
+            num_files=num_files,
+            start_file=start_file,
+            global_comm=global_comm,
+            chunk_size=chunk_size,
+            roll_writes=roll_writes
+            )
         self.counter = 0
-        self.colormeshes = []
+        self.colormeshes: list[tuple[int, Colormesh]] = []
 
-    def setup_grid(self, *args, **kwargs):
+    def setup_grid(
+            self, 
+            num_rows: int = 1, 
+            num_cols: int = 1, 
+            cbar: bool = False, 
+            polar: bool = False, 
+            mollweide: bool = False, 
+            orthographic: bool = False, 
+            threeD: bool = False,
+            col_inch: float = 3, 
+            row_inch: float = 3, 
+            pad_factor: float = 10
+            ) -> None:
         """ Initialize the plot grid for the colormeshes """
-        self.grid = RegularColorbarPlotGrid(*args, **kwargs)
+        self.grid = RegularColorbarPlotGrid(
+            num_rows=num_rows,
+            num_cols=num_cols,
+            cbar=cbar,
+            polar=polar,
+            mollweide=mollweide,
+            orthographic=orthographic,
+            threeD=threeD,
+            col_inch=col_inch,
+            row_inch=row_inch,
+            pad_factor=pad_factor
+        )
 
-    def use_custom_grid(self, custom_grid):
+    def use_custom_grid(self, custom_grid: PlotGrid) -> None:
         """ Allows the user to use a custom grid """
         self.grid = custom_grid
 
-    def add_colormesh(self, *args, **kwargs):
-        self.colormeshes.append((self.counter, Colormesh(*args, **kwargs)))
+    def add_colormesh(self, *args, **kwargs) -> None:
+        self.colormeshes.append((self.counter, Colormesh(*args, **kwargs))) #type: ignore
         self.counter += 1
 
-    def add_cartesian_colormesh(self, *args, **kwargs):
-        self.colormeshes.append((self.counter, CartesianColormesh(*args, **kwargs)))
+    def add_cartesian_colormesh(self, *args, **kwargs) -> None:
+        self.colormeshes.append((self.counter, CartesianColormesh(*args, **kwargs))) #type: ignore
         self.counter += 1
 
-    def add_polar_colormesh(self, *args, **kwargs):
-        self.colormeshes.append((self.counter, PolarColormesh(*args, **kwargs)))
+    def add_polar_colormesh(self, *args, **kwargs) -> None: 
+        self.colormeshes.append((self.counter, PolarColormesh(*args, **kwargs))) #type: ignore
         self.counter += 1
 
-    def add_mollweide_colormesh(self, *args, **kwargs):
-        self.colormeshes.append((self.counter, MollweideColormesh(*args, **kwargs)))
+    def add_mollweide_colormesh(self, *args, **kwargs) -> None:
+        self.colormeshes.append((self.counter, MollweideColormesh(*args, **kwargs))) #type: ignore
         self.counter += 1
 
-    def add_orthographic_colormesh(self, *args, **kwargs):
-        self.colormeshes.append((self.counter, OrthographicColormesh(*args, **kwargs)))
+    def add_orthographic_colormesh(self, *args, **kwargs) -> None:
+        self.colormeshes.append((self.counter, OrthographicColormesh(*args, **kwargs))) #type: ignore
         self.counter += 1
 
-    def add_meridional_colormesh(self, left=None, right=None, **kwargs):
+    def add_meridional_colormesh(self, left_task: str, right_task: str, **kwargs) -> None:
         """ Adds a colormesh for a meridional slice of a spherical field.
         Must specify both left and right sides of the meridional slice. """
-        if left is not None and right is not None:
-            self.colormeshes.append((self.counter, MeridionalColormesh(left, left=True, **kwargs)))
-            self.colormeshes.append((self.counter, MeridionalColormesh(right, linked_cbar_cm=self.colormeshes[-1][1], linked_profile_cm=self.colormeshes[-1][1], **kwargs)))
+        #TODO: be smarter about setting up the colorbars -- do it based on both sides rather than just left.
+        self.colormeshes.append((self.counter, MeridionalColormesh(left_task, left=True, **kwargs))) #type: ignore
+        self.colormeshes.append((self.counter, MeridionalColormesh(right_task, linked_cbar_cm=self.colormeshes[-1][1], linked_profile_cm=self.colormeshes[-1][1], **kwargs))) #type: ignore
         self.counter += 1
 
-    def add_ball_shell_polar_colormesh(self, ball=None, shell=None, r_inner=None, r_outer=None, **kwargs):
+    def add_ball_shell_polar_colormesh(
+            self, 
+            ball_task: str, 
+            shell_task: str, 
+            r_inner: Optional[float] = None, 
+            r_outer: Optional[float] = None, 
+            **kwargs
+            ) -> None:
         """ Adds a colormesh for a polar / equatorial slice of a spherical field that spans a ball and a shell. """
-        if ball is not None and shell is not None:
-            self.colormeshes.append((self.counter, PolarColormesh(ball, r_inner=0, r_outer=r_inner, **kwargs)))
-            self.colormeshes.append((self.counter, PolarColormesh(shell, r_inner=r_inner, r_outer=r_outer, linked_cbar_cm=self.colormeshes[-1][1], **kwargs)))
+        #TODO: fix how colorbar is set; currently set by the ball.
+        self.colormeshes.append((self.counter, PolarColormesh(ball_task, r_inner=0, r_outer=r_inner, **kwargs))) #type: ignore
+        self.colormeshes.append((self.counter, PolarColormesh(shell_task, r_inner=r_inner, r_outer=r_outer, linked_cbar_cm=self.colormeshes[-1][1], **kwargs))) #type: ignore
         self.counter += 1
 
-    def add_ball_shell_meridional_colormesh(self, ball_left=None, ball_right=None, shell_left=None, shell_right=None, r_inner=None, r_outer=None, **kwargs):
+    def add_ball_shell_meridional_colormesh(
+            self, 
+            ball_left_task: str, 
+            ball_right_task: str,
+            shell_left_task: str, 
+            shell_right_task: str, 
+            r_stitch: Optional[float] = None, 
+            r_outer: Optional[float] = None, 
+            **kwargs
+            ) -> None:
         """ Adds a colormesh for a meridional slice of a spherical field that spans a ball and a shell.
             Must specify both left and right sides of the meridional slice for both the ball and the shell."""
-        if ball_left is not None and shell_left is not None and ball_right is not None and shell_right is not None:
-            self.colormeshes.append((self.counter, MeridionalColormesh(ball_left, left=True, r_inner=0, r_outer=r_inner, **kwargs)))
-            first_cm = self.colormeshes[-1][1]
-            self.colormeshes.append((self.counter, MeridionalColormesh(ball_right, r_inner=0, r_outer=r_inner, linked_cbar_cm=first_cm, linked_profile_cm=first_cm, **kwargs)))
-            self.colormeshes.append((self.counter, MeridionalColormesh(shell_left, left=True, r_inner=r_inner, r_outer=r_outer, linked_cbar_cm=first_cm, **kwargs)))
-            first_cm_shell = self.colormeshes[-1][1]
-            self.colormeshes.append((self.counter, MeridionalColormesh(shell_right, r_inner=r_inner, r_outer=r_outer, linked_cbar_cm=first_cm, linked_profile_cm=first_cm_shell, **kwargs)))
+        #TODO: fix how colorbar is set; currently set by the left side of the ball.
+        self.colormeshes.append((self.counter, MeridionalColormesh(ball_left_task, left=True, r_inner=0, r_outer=r_stitch, **kwargs))) #type: ignore
+        first_cm = self.colormeshes[-1][1]
+        self.colormeshes.append((self.counter, MeridionalColormesh(ball_right_task, r_inner=0, r_outer=r_stitch, linked_cbar_cm=first_cm, linked_profile_cm=first_cm, **kwargs))) #type: ignore
+        self.colormeshes.append((self.counter, MeridionalColormesh(shell_left_task, left=True, r_inner=r_stitch, r_outer=r_outer, linked_cbar_cm=first_cm, **kwargs))) #type: ignore
+        self.colormeshes.append((self.counter, MeridionalColormesh(shell_right_task, r_inner=r_stitch, r_outer=r_outer, linked_cbar_cm=first_cm, linked_profile_cm=first_cm, **kwargs))) #type: ignore
         self.counter += 1
 
-    def add_shell_shell_meridional_colormesh(self, left=None, right=None, r_inner=None, r_stitch=None, r_outer=None, **kwargs):
+    def add_shell_shell_meridional_colormesh(
+            self, 
+            left_inner_shell: str, 
+            left_outer_shell: str,
+            right_inner_shell: str, 
+            right_outer_shell: str,
+            r_inner: float, 
+            r_stitch: float, 
+            r_outer: float, 
+            **kwargs
+            ) -> None:
         """ Adds a colormesh for a meridional slice of a spherical field that spans two shells. 
             Must specify both left and right sides of the meridional slice for both shells."""
-        if len(left) != 2 or len(right) != 2:
-            raise ValueError("'left' and 'right' must be two-item tuples or lists of strings.")
-        if r_inner is None or r_stitch is None or r_outer is None:
-            raise ValueError("r_inner, r_stitch, and r_outer must be specified")
-        self.colormeshes.append((self.counter, MeridionalColormesh(left[0], left=True, r_inner=r_inner, r_outer=r_stitch, **kwargs)))
+        self.colormeshes.append((self.counter, MeridionalColormesh(left_inner_shell, left=True, r_inner=r_inner, r_outer=r_stitch, **kwargs))) #type: ignore
         first_cm = self.colormeshes[-1][1]
-        self.colormeshes.append((self.counter, MeridionalColormesh(right[0], r_inner=r_inner, r_outer=r_stitch, linked_cbar_cm=first_cm, linked_profile_cm=first_cm, **kwargs)))
-        self.colormeshes.append((self.counter, MeridionalColormesh(left[1], left=True, r_inner=r_stitch, r_outer=r_outer, linked_cbar_cm=first_cm, **kwargs)))
+        self.colormeshes.append((self.counter, MeridionalColormesh(right_inner_shell, r_inner=r_inner, r_outer=r_stitch, linked_cbar_cm=first_cm, linked_profile_cm=first_cm, **kwargs))) #type: ignore
+        self.colormeshes.append((self.counter, MeridionalColormesh(left_outer_shell, left=True, r_inner=r_stitch, r_outer=r_outer, linked_cbar_cm=first_cm, **kwargs))) #type: ignore
         outer_cm = self.colormeshes[-1][1]
-        self.colormeshes.append((self.counter, MeridionalColormesh(right[1], r_inner=r_stitch, r_outer=r_outer, linked_cbar_cm=first_cm, linked_profile_cm=outer_cm, **kwargs)))
+        self.colormeshes.append((self.counter, MeridionalColormesh(right_outer_shell, r_inner=r_stitch, r_outer=r_outer, linked_cbar_cm=first_cm, linked_profile_cm=outer_cm, **kwargs))) #type: ignore
         self.counter += 1
 
-    def add_ball_2shells_polar_colormesh(self, fields=list(), r_stitches=(0.5, 1), r_outer=1.5, **kwargs):
+    def add_ball_2shells_polar_colormesh(
+            self, 
+            fields: tuple[str,str,str], 
+            r_stitches: tuple[float,float], 
+            r_outer: float, 
+            **kwargs
+            ) -> None:
         """ Adds a colormesh for a polar / equatorial slice of a spherical field that spans a ball and two shells."""
-        if len(fields) == 3:
-            self.colormeshes.append((self.counter, PolarColormesh(fields[0], r_inner=0, r_outer=r_stitches[0], **kwargs)))
-            self.colormeshes.append((self.counter, PolarColormesh(fields[1], r_inner=r_stitches[0], r_outer=r_stitches[1], linked_cbar_cm=self.colormeshes[-1][1], **kwargs)))
-            self.colormeshes.append((self.counter, PolarColormesh(fields[2], r_inner=r_stitches[1], r_outer=r_outer, linked_cbar_cm=self.colormeshes[-2][1], **kwargs)))
-        else:
-            raise ValueError("Must specify 3 fields for ball_2shells_polar_colormesh")
+        self.colormeshes.append((self.counter, PolarColormesh(fields[0], r_inner=0, r_outer=r_stitches[0], **kwargs))) #type: ignore
+        self.colormeshes.append((self.counter, PolarColormesh(fields[1], r_inner=r_stitches[0], r_outer=r_stitches[1], linked_cbar_cm=self.colormeshes[-1][1], **kwargs))) #type: ignore
+        self.colormeshes.append((self.counter, PolarColormesh(fields[2], r_inner=r_stitches[1], r_outer=r_outer, linked_cbar_cm=self.colormeshes[-2][1], **kwargs)))    #type: ignore
         self.counter += 1
 
-    def add_ball_2shells_meridional_colormesh(self, left_fields=list(), right_fields=list(),
-                                              r_stitches=(0.5, 1), r_outer=1.5, **kwargs):
+    def add_ball_2shells_meridional_colormesh(
+            self, 
+            left_fields: tuple[str,str,str], 
+            right_fields: tuple[str,str,str],
+            r_stitches: tuple[float,float], 
+            r_outer: float, 
+            **kwargs
+            ) -> None:
         """ Adds a colormesh for a meridional slice of a spherical field that spans a ball and two shells.
             Must specify both left and right sides of the meridional slice for the ball and both shells."""
-        if len(left_fields) == 3 and len(right_fields) == 3:
-            self.colormeshes.append((self.counter, MeridionalColormesh(left_fields[0], left=True, r_inner=0, r_outer=r_stitches[0], **kwargs)))
-            first_cm = self.colormeshes[-1][1]
-            self.colormeshes.append((self.counter, MeridionalColormesh(right_fields[0], left=False, r_inner=0, r_outer=r_stitches[0], linked_profile_cm=self.colormeshes[-1][1], linked_cbar_cm=first_cm, **kwargs)))
-            self.colormeshes.append((self.counter, MeridionalColormesh(left_fields[1], left=True, r_inner=r_stitches[0], r_outer=r_stitches[1], linked_cbar_cm=first_cm, **kwargs)))
-            self.colormeshes.append((self.counter, MeridionalColormesh(right_fields[1], left=False, r_inner=r_stitches[0], r_outer=r_stitches[1], linked_profile_cm=self.colormeshes[-1][1], linked_cbar_cm=first_cm, **kwargs)))
-            self.colormeshes.append((self.counter, MeridionalColormesh(left_fields[2], left=True, r_inner=r_stitches[1], r_outer=r_outer, linked_cbar_cm=first_cm, **kwargs)))
-            self.colormeshes.append((self.counter, MeridionalColormesh(right_fields[2], left=False, r_inner=r_stitches[1], r_outer=r_outer, linked_profile_cm=self.colormeshes[-1][1], linked_cbar_cm=first_cm, **kwargs)))
-        else:
-            raise ValueError("Must specify 3 left and right fields for ball_2shells_meridional_colormesh")
+        self.colormeshes.append((self.counter, MeridionalColormesh(left_fields[0], left=True, r_inner=0, r_outer=r_stitches[0], **kwargs))) #type: ignore
+        first_cm = self.colormeshes[-1][1]
+        self.colormeshes.append((self.counter, MeridionalColormesh(right_fields[0], left=False, r_inner=0, r_outer=r_stitches[0], linked_profile_cm=self.colormeshes[-1][1], linked_cbar_cm=first_cm, **kwargs))) #type: ignore
+        self.colormeshes.append((self.counter, MeridionalColormesh(left_fields[1], left=True, r_inner=r_stitches[0], r_outer=r_stitches[1], linked_cbar_cm=first_cm, **kwargs))) #type: ignore
+        self.colormeshes.append((self.counter, MeridionalColormesh(right_fields[1], left=False, r_inner=r_stitches[0], r_outer=r_stitches[1], linked_profile_cm=self.colormeshes[-1][1], linked_cbar_cm=first_cm, **kwargs))) #type: ignore
+        self.colormeshes.append((self.counter, MeridionalColormesh(left_fields[2], left=True, r_inner=r_stitches[1], r_outer=r_outer, linked_cbar_cm=first_cm, **kwargs))) #type: ignore
+        self.colormeshes.append((self.counter, MeridionalColormesh(right_fields[2], left=False, r_inner=r_stitches[1], r_outer=r_outer, linked_profile_cm=self.colormeshes[-1][1], linked_cbar_cm=first_cm, **kwargs))) #type: ignore
         self.counter += 1
 
-    def _groom_grid(self):
+    def _groom_grid(self) -> tuple[list[matplotlib.axes.Axes], list[matplotlib.axes.Axes]]:
         """ Assign colormeshes to axes subplots in the plot grid """
+        assert self.grid is not None, "Must set up a grid before plotting"
         axs, caxs = [], []
         for nr in range(self.grid.nrows):
             for nc in range(self.grid.ncols):
@@ -451,7 +556,7 @@ class SlicePlotter(SingleTypeReader):
                     caxs.append(self.grid.cbar_axes[k])
         return axs, caxs
 
-    def plot_colormeshes(self, start_fig=1, dpi=200, **kwargs):
+    def plot_colormeshes(self, start_fig: int = 1, dpi: int = 200, **mpl_kwargs):
         """
         Plot figures of the 2D dedalus data slices at each timestep.
 
@@ -464,6 +569,7 @@ class SlicePlotter(SingleTypeReader):
                 extra keyword args for matplotlib.pyplot.pcolormesh
         """
         with self.my_sync:
+            assert self.grid is not None, "Must set up a grid before plotting"
             axs, caxs = self._groom_grid()
             tasks = []
             for k, cm in self.colormeshes:
@@ -472,16 +578,15 @@ class SlicePlotter(SingleTypeReader):
             if self.idle: return
 
             while self.writes_remain():
-#                for ax in axs: ax.clear()
                 for cax in caxs: cax.clear()
                 dsets, ni = self.get_dsets(tasks)
+                assert self.current_file_handle is not None, "current_file_handle must be set"
                 sim_time = self.current_file_handle['scales/sim_time'][ni]
                 write_num = self.current_file_handle['scales/write_number'][ni]
-#                time_data = dsets[self.colormeshes[0][1].task].dims[0]
                 for k, cm in self.colormeshes:
                     ax = axs[k]
                     cax = caxs[k]
-                    cm.plot_colormesh(ax, cax, dsets[cm.task], ni, **kwargs)
+                    cm.plot_colormesh(ax, cax, dsets[cm.task], ni, **mpl_kwargs)
                 plt.suptitle('t = {:.4e}'.format(sim_time))
                 self.grid.fig.savefig('{:s}/{:s}_{:06d}.png'.format(self.out_dir, self.out_name, int(write_num+start_fig-1)), dpi=dpi, bbox_inches='tight')
                 
