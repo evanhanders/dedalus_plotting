@@ -1,7 +1,8 @@
 from collections import OrderedDict
 import logging
 from sys import stdout
-from typing import Optional, Union
+from typing import Optional, Union, Callable
+from dataclasses import dataclass
 
 import numpy as np
 import h5py # type: ignore
@@ -12,7 +13,7 @@ import matplotlib.pyplot as plt
 matplotlib.rcParams.update({'font.size': 9})
 
 from dedalus.extras.flow_tools import GlobalArrayReducer # type: ignore
-from plotpal.file_reader import SingleTypeReader, match_basis
+from plotpal.file_reader import SingleTypeReader, match_basis, RolledDset
 from plotpal.plot_grid import RegularPlotGrid, PlotGrid
 
 logger = logging.getLogger(__name__.split('.')[-1])
@@ -204,6 +205,15 @@ class AveragedProfilePlotter(SingleTypeReader):
                     save_dim_scale(dset.dims[1], scale_group, task, basis_name, basis)
 
 
+@dataclass
+class ProfileLine:
+    basis: str
+    task: Union[str, Callable[[matplotlib.axes.Axes, dict[str, Union[h5py.Dataset, RolledDset]], int], None]]
+    grid_num: int
+    needed_tasks: Optional[list[str]]
+    ylim: tuple[Optional[float], Optional[float]]
+    mpl_kwargs: dict[str, str]
+
 class RolledProfilePlotter(SingleTypeReader):
     """ 
     A class for stepping through each profile in an IVP's output and plotting rolled
@@ -211,22 +221,43 @@ class RolledProfilePlotter(SingleTypeReader):
     profiles to hdf5 files and plot them. 
     """
 
-    def __init__(self, *args, roll_writes=20, **kwargs):
+    def __init__(
+            self,
+            run_dir: str, 
+            sub_dir: str, 
+            out_name: str, 
+            distribution: str = 'even-write',
+            num_files: Optional[int] = None, 
+            roll_writes: Optional[int] = 20,
+            start_file: int = 1,
+            global_comm: MPI.Intracomm = MPI.COMM_WORLD,
+            chunk_size: int = 1000
+    ):
         """ Initialize the plotter. """
-        super().__init__(*args, roll_writes=roll_writes, **kwargs)
-        self.lines = []
-        self.tasks = []
+        super().__init__(
+            run_dir = run_dir,
+            sub_dir = sub_dir,
+            out_name = out_name,
+            distribution = distribution,
+            num_files = num_files,
+            roll_writes = roll_writes,
+            start_file = start_file,
+            global_comm = global_comm,
+            chunk_size = chunk_size
+)
+        self.lines: list[ProfileLine] = []
+        self.tasks: list[str] = []
         self.color_ind = 0
 
-    def setup_grid(self, *args, **kwargs):
+    def setup_grid(self, *args, **kwargs) -> None:
         """ Initialize the plot grid for the colormeshes """
-        self.grid = RegularPlotGrid(*args, **kwargs)
+        self.grid: PlotGrid = RegularPlotGrid(*args, **kwargs) # type: ignore
 
-    def use_custom_grid(self, custom_grid):
+    def use_custom_grid(self, custom_grid: PlotGrid) -> None:
         """ Allows user to pass in a custom PlotGrid object. """
         self.grid = custom_grid
 
-    def _groom_grid(self):
+    def _groom_grid(self) -> list[matplotlib.axes.Axes]:
         """ Assign colormeshes to axes subplots in the plot grid """
         axs = []
         for nr in range(self.grid.nrows):
@@ -236,74 +267,85 @@ class RolledProfilePlotter(SingleTypeReader):
                     axs.append(self.grid.axes[k])
         return axs
 
-    def add_line(self, basis, task, grid_num, needed_tasks=None, ylim=(None, None), **kwargs):
+    def add_line(
+            self, 
+            basis: str, 
+            task: Union[str, Callable[[matplotlib.axes.Axes, dict[str, Union[h5py.Dataset, RolledDset]], int], None]],
+            grid_num: int,
+            needed_tasks: Optional[list[str]] = None,
+            ylim: tuple[Optional[float], Optional[float]] = (None, None),
+            mpl_kwargs: dict = {}
+            ) -> None:
         """
         Specifies a profile to plot rolled averages of. 
 
         Parameters
         ----------
-            basis : str
-                The name of the dedalus basis for the x-axis
-            task : str or python function
+            basis : The name of the dedalus basis for the x-axis
+            task :
                 If str, must be the name of a profile
                 If function, must accept as arguments, in order:
                      1. a matplotlib subplot axis (ax), 
                      2. a dictionary of datasets (dsets), 
                      3. an integer for indexing (ni)
-            grid_num : int
-                Panel index for the plot
-            ylim (optional) : tuple of floats
-                Y-limits for the plot
-            **kwargs :
-                Keyword arguments to pass to the matplotlib.pyplot.plot function
+            grid_num :  Panel index for the plot
+            ylim (optional) :  Y-limits for the plot
+            mpl_kwargs : Keyword arguments to pass to the matplotlib.pyplot.plot function
         """
-        if 'color' not in kwargs and 'c' not in kwargs:
-            kwargs['color'] = 'C' + str(self.color_ind)
+        if 'color' not in mpl_kwargs and 'c' not in mpl_kwargs:
+            mpl_kwargs['color'] = 'C' + str(self.color_ind)
             self.color_ind += 1
         if type(task) != str and needed_tasks is None:
             raise ValueError("must specify necessary tasks for your function.")
-        if 'label' not in kwargs:
-            kwargs['label'] = task
-        self.lines.append((grid_num, basis, task, ylim, kwargs, needed_tasks))
+        if 'label' not in mpl_kwargs:
+            mpl_kwargs['label'] = task
+        line = ProfileLine(
+            basis=basis,
+            task=task,
+            grid_num=grid_num,
+            needed_tasks=needed_tasks,
+            ylim=ylim,
+            mpl_kwargs=mpl_kwargs
+        )
+        self.lines.append(line)
 
-    def plot_lines(self, start_fig=1, dpi=200, save_profiles=False):
+    def plot_lines(self, start_fig: int = 1, dpi: int = 200, save_profiles: bool = False) -> None:
 
         """
         Plot figures of the rolled dedalus profiles at each timestep.
 
         # Arguments
-            start_fig (int) :
-                The number in the filename for the first write.
-            dpi (int) :
-                The pixel density of the output image
-            save_profiles (bool) :
-                If True, write an output file of all of the saved profiles.
+            start_fig : The number in the filename for the first write.
+            dpi : The pixel density of the output image
+            save_profiles : If True, write an output file of all of the saved profiles.
         """
         with self.my_sync:
             if self.idle: return
 
             axs = self._groom_grid()
             tasks = []
-            for line_data in self.lines:
-                this_task = line_data[2]
+            for line in self.lines:
+                this_task = line.task
                 if type(this_task) == str:
                     # plot is a simple handler output profile.
                     if this_task not in tasks:
                         tasks.append(this_task)
                 else:
                     # plot is a function.
-                    needed_tasks = line_data[5]
-                    for task in needed_tasks:
-                        if task not in tasks:
-                            tasks.append(task)
+                    needed_tasks = line.needed_tasks
+                    assert needed_tasks is not None, "Must specify needed tasks for Callable tasks."
+                    for this_task in needed_tasks:
+                        if this_task not in tasks:
+                            tasks.append(this_task)
                    
-            saved_times = []
-            saved_writes = []
-            saved_profiles = OrderedDict()
-            saved_bases = OrderedDict()
+            saved_times: list[float] = []
+            saved_writes: list[int] = []
+            saved_profiles: dict[str, list[np.ndarray]] = OrderedDict()
+            saved_bases: dict[str, np.ndarray] = OrderedDict()
             for k in tasks:
                 saved_profiles[k] = []
             while self.writes_remain():
+                assert self.current_file_handle is not None, "File handle unable to be created and is None."
                 dsets, ni = self.get_dsets(tasks)
                 time_data = self.current_file_handle['scales']
 
@@ -314,16 +356,19 @@ class RolledProfilePlotter(SingleTypeReader):
                         saved_profiles[k].append(dsets[k][ni])
 
                 # Plot the profiles
-                for line_data in self.lines:
-                    ind, basis, task, ylim, kwargs, needed_tasks = line_data
-                    ax = axs[ind]
+                for line in self.lines:
+                    task = line.task
+                    ylim = line.ylim
+                    basis = line.basis
+                    ax = axs[line.grid_num]
                     if type(task) == str:
                         dset = dsets[task]
                         x = match_basis(dset, basis)
                         if basis not in saved_bases.keys():
                             saved_bases[basis] = np.copy(x)
-                        ax.plot(x, dset[ni].squeeze(), **kwargs)
+                        ax.plot(x, dset[ni].squeeze(), **line.mpl_kwargs) #type: ignore
                     else:
+                        assert callable(task), "task must be a string or a callable function."
                         task(ax, dsets, ni)
                     if ylim[0] is not None or ylim[1] is not None:
                         ax.set_ylim(*ylim)
@@ -338,50 +383,52 @@ class RolledProfilePlotter(SingleTypeReader):
             if save_profiles:
                 self._save_profiles(saved_bases, saved_profiles, saved_times, saved_writes)
 
-    def _save_profiles(self, bases, profiles, times, writes):
+    def _save_profiles(
+            self, 
+            bases: dict[str, np.ndarray],
+            profiles: dict[str, list[np.ndarray]],
+            times_list: list[float], 
+            writes_list: list[int]
+            ) -> None:
         """
         Saves time-averaged profiles to a file.
 
         Warning: this function can take a long time to run if there are many writes.
 
         # Arguments
-            bases (OrderedDict) :
-                NumPy arrays of dedalus basis grid points
-            profiles (OrderedDict) :
-                Lists of time-averaged profiles
-            times (list) :
-                Lists of tuples of start and end times of averaging intervals
+            bases : NumPy arrays of dedalus basis grid points
+            profiles : Lists of time-averaged profiles
+            times : Lists of tuples of rough times of averaging intervals
+            writes : List of write numbers
         """
-        times = np.array(times)
-        writes = np.array(writes)
+        times = np.array(times_list)
+        writes = np.array(writes_list, dtype=np.int64)
         # get total number of writes
         n_writes = np.zeros(1,)
-        min_write = np.zeros(1,)
+        min_write = np.zeros(1, dtype=np.int64)
         n_writes[0] = writes.size
         min_write[0] = writes.min()
         self.comm.Allreduce(MPI.IN_PLACE, n_writes, op=MPI.SUM)
         self.comm.Allreduce(MPI.IN_PLACE, min_write, op=MPI.MIN)
-        glob_writes = np.arange(n_writes) + min_write
+        glob_writes = np.arange(n_writes[0], dtype=np.int64)  + min_write[0]
         glob_times  = np.zeros_like(glob_writes)
         local_slice  = np.zeros_like(glob_writes, dtype=bool)
         local_slice[(glob_writes >= writes.min())*(glob_writes <= writes.max())] = True
         glob_times[local_slice] = times
         self.comm.Allreduce(MPI.IN_PLACE, glob_times, op=MPI.SUM)
 
-        glob_profs = OrderedDict()
+        glob_profs: dict[str, np.ndarray] = OrderedDict()
         for k, p in profiles.items():
-            p = np.array(p)
-            glob_profs[k] = np.zeros((glob_times.size, *tuple(p.shape[1:])))
-            glob_profs[k][local_slice,:] = p
+            prof = np.array(p)
+            glob_profs[k]= np.zeros((glob_times.size, *tuple(prof.shape[1:])))
+            glob_profs[k][local_slice,:] = prof
             self.comm.Allreduce(MPI.IN_PLACE, glob_profs[k], op=MPI.SUM)
 
         if self.comm.rank == 0:
-            print(glob_writes, glob_times, times)
             with h5py.File('{:s}/post_{:s}.h5'.format(self.out_dir, self.out_name), 'w') as f:
                 for k, base in bases.items():
-                    f[k] = base
-                for k, p in glob_profs.items():
-                    print(p.squeeze()[:,0])
-                    f[k] = p.squeeze()
+                    f[k] = base #type: ignore
+                for k, p in glob_profs.items(): #type: ignore
+                    f[k] = p.squeeze() #type: ignore
                 f['sim_time'] = glob_times
                 f['sim_writes'] = glob_writes
