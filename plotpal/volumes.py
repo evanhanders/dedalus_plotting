@@ -1,20 +1,27 @@
+from collections import OrderedDict
+from typing import Union, Optional, Callable
+from dataclasses import dataclass
+
+import h5py #type: ignore
+import numpy as np
+from scipy.interpolate import interp1d #type: ignore
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
+from mpl_toolkits.mplot3d import Axes3D # type: ignore
 matplotlib.rcParams.update({'font.size': 9})
+import pyvista as pv
+from mpi4py import MPI #type: ignore
 
-from collections import OrderedDict
-from mpi4py import MPI
-import numpy as np
-from scipy.interpolate import interp1d
 
 from plotpal.file_reader import SingleTypeReader, match_basis
-from plotpal.plot_grid import RegularColorbarPlotGrid, PyVista3DPlotGrid
+from plotpal.plot_grid import RegularColorbarPlotGrid, PyVista3DPlotGrid, PlotGrid
+from plotpal.file_reader import RolledDset
 
 import logging
 logger = logging.getLogger(__name__.split('.')[-1])
 
-def build_s2_vertices(phi, theta):
+def build_s2_vertices(phi: np.ndarray, theta: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     """ Logic for building coordinate singularity at the pole in a sphere """
     phi = phi.ravel()
     phi_vert = np.concatenate([phi, [2*np.pi]])
@@ -25,7 +32,13 @@ def build_s2_vertices(phi, theta):
     return phi_vert, theta_vert
 
 
-def build_spherical_vertices(phi, theta, r, Ri, Ro):
+def build_spherical_vertices(
+        phi: np.ndarray, 
+        theta: np.ndarray, 
+        r: np.ndarray, 
+        Ri: float, 
+        Ro: float
+        ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """ Logic for building 'full' spherical coordinates to avoid holes in volume plots """
     phi_vert, theta_vert = build_s2_vertices(phi, theta)
     r = r.ravel()
@@ -34,7 +47,12 @@ def build_spherical_vertices(phi, theta, r, Ri, Ro):
     return phi_vert, theta_vert, r_vert
 
 
-def spherical_to_cartesian(phi, theta, r, mesh=True):
+def spherical_to_cartesian(
+        phi: np.ndarray, 
+        theta: np.ndarray, 
+        r: np.ndarray, 
+        mesh: bool = True
+        ) -> np.ndarray:
     """ Converts (phi, theta, r) -> (x, y, z) """
     if mesh:
         phi, theta, r = np.meshgrid(phi, theta, r, indexing='ij')
@@ -44,26 +62,28 @@ def spherical_to_cartesian(phi, theta, r, mesh=True):
     return np.array([x, y, z]) 
 
 
-def construct_surface_dict(x_vals, y_vals, z_vals, data_vals, x_bounds=None, y_bounds=None, z_bounds=None, bool_function=np.logical_or):
+def construct_surface_dict(
+        x_vals: Union[np.ndarray, float], 
+        y_vals: Union[np.ndarray, float],
+        z_vals: Union[np.ndarray, float],
+        data_vals: np.ndarray, 
+        x_bounds: Optional[tuple[float, float]] = None, 
+        y_bounds: Optional[tuple[float, float]] = None,
+        z_bounds: Optional[tuple[float, float]] = None,
+        bool_function: np.ufunc = np.logical_or
+        ) -> dict[str, np.ndarray]:
     """
     Takes grid coordinates and data on grid and prepares it for Cartesian 3D surface plotting in plotly or PyVista
     
     Arguments:
     ----------
-    x_vals : NumPy array (1D) or float
-        Gridspace x values of the data
-    y_vals : NumPy array (1D) or float
-        Gridspace y values of the data
-    z_vals : NumPy array (1D) or float
-        Gridspace z values of the data
-    data_vals : NumPy array (2D)
-        Gridspace values of the data
-    x_bounds : Tuple of floats of length 2, optional
-        If specified, the min and max x values to plot
-    y_bounds : Tuple of floats of length 2, optional
-        If specified, the min and max y values to plot
-    z_bounds : Tuple of floats of length 2, optional
-        If specified, the min and max z values to plot
+    x_vals : Gridspace x values of the data
+    y_vals : Gridspace y values of the data
+    z_vals : Gridspace z values of the data
+    data_vals : Gridspace values of the data
+    x_bounds : If specified, the min and max x values to plot
+    y_bounds : If specified, the min and max y values to plot
+    z_bounds : If specified, the min and max z values to plot
         
     Returns a dictionary containing 'x', 'y', 'z', and 'surfacecolor' keys, which are NumPy arrays of the same shape
     """
@@ -115,74 +135,54 @@ def construct_surface_dict(x_vals, y_vals, z_vals, data_vals, x_bounds=None, y_b
 
     return side_info
 
+@dataclass
 class Box:
     """
     A class with all of the information for plotting a 3D box in matplotlib or PyVista
     """
+    # Basic fields required for a box
+    left: str # The name of the field to plot on the left side of the box
+    right: str # The name of the field to plot on the right side of the box
+    top: str # The name of the field to plot on the top side of the box
 
-    def __init__(self, left, right, top, left_mid=None , right_mid=None, top_mid=None, 
-                 x_basis='x', y_basis='y',z_basis='z', vector_ind=None, cmap='RdBu_r', label=None,
-                 vmin=None, vmax=None, cmap_exclusion=0.005, log=False, pos_def=False, 
-                 remove_mean=False, remove_x_mean=False, divide_x_std=False,
-                 azim=25, elev=10, stretch=0):
-        """
-        Initializes a Box object
+    # Extra fields required for a cutout box
+    left_mid: Optional[str] = None # The name of the field to plot on the left side of the cutout
+    right_mid: Optional[str] = None # The name of the field to plot on the right side of the cutout
+    top_mid: Optional[str] = None # The name of the field to plot on the top side of the cutout
 
-        Arguments:
-        ----------
-        left, right, top : strings
-            The names of the fields to plot on the left, right, and top sides of the box
-        left_mid, right_mid, top_mid : strings, optional
-            The names of the fields to plot on the left, right, and top sides of the box, respectively, in the middle of the box for a cutout.
-            If not specified, no cutout is made
-        x_basis, y_basis, z_basis : strings, optional
-            The names of the x-, y-, and z- bases to use for the box. Default is 'x', 'y', and 'z', respectively
-        cmap : string, optional
-            The name of the colormap to use for the box. Default is 'RdBu_r'
-        vector_ind : int, optional
-            If the field is a vector field, the index of the component to plot. For use in d3.
-        vmin, vmax : floats, optional
-            The minimum and maximum values to use for the colormap. If not specified, the minimum and maximum values of the field are used
-        cmap_exclusion : float, optional
-            The fraction of the colormap to exclude from the minimum and maximum values. Default is 0.005
-        log : bool, optional
-            If True, the colormap is plotted on a log scale. Default is False
-        pos_def : bool, optional
-            If True, the colormap is positive-definite. Default is False
-        remove_mean : bool, optional
-            If True, the mean of the field is subtracted from the field before plotting. Default is False
-        remove_x_mean : bool, optional
-            If True, the mean of the field in the x-direction is subtracted from the field before plotting. Default is False
-        divide_x_std : bool, optional
-            If True, the field is divided by the standard deviation in the x-direction before plotting. Default is False
-        azim, elev : floats, optional
-            The azimuth and elevation angles to view the box from. Currently not implemented for PyVista.
-        stretch : float, optional
-            A factor by which to extend the faces in a cutout box. Default is 0.
-        
-        """
-        self.left, self.right, self.top = left, right, top
-        self.left_mid, self.right_mid, self.top_mid = left_mid, right_mid, top_mid
-        self.x_basis, self.y_basis, self.z_basis = x_basis, y_basis, z_basis
-        self.vector_ind = vector_ind
-        self.cmap, self.label = cmap, label
-        self.vmin, self.vmax = vmin, vmax
-        self.cmap_exclusion = cmap_exclusion
-        self.log, self.pos_def = log, pos_def
-        self.remove_mean, self.remove_x_mean, self.divide_x_std = remove_mean, remove_x_mean, divide_x_std
-        self.azim, self.elev = azim, elev
-        self.stretch = stretch
-        self.first = True
+    # Basis names
+    x_basis: str = 'x' 
+    y_basis: str = 'y' 
+    z_basis: str = 'z' 
 
-        if label is None:
-            self.label = 'field'
+    vector_ind: Optional[int] = None # The index of the component to plot if the field is a vector field
+    
+    # Colormap information
+    cmap: str = 'RdBu_r' # The name of the colormap to use
+    label: str = 'field' # The label to use for the colorbar
+    vmin: Optional[float] = None # The minimum value to use for the colormap
+    vmax: Optional[float] = None # The maximum value to use for the colormap
+    cmap_exclusion: float = 0.005 # The fraction of the colormap to exclude from the minimum and maximum values
+    
+    # Field modifications
+    log: bool = False # If True, the colormap is plotted on a log scale
+    pos_def: bool = False # If True, the colormap is positive-definite
+    remove_mean: bool = False # If True, the mean of the field is subtracted from the field before plotting
+    remove_x_mean: bool = False # If True, the mean of the field in the x-direction is subtracted from the field before plotting
+    divide_x_std: bool = False # If True, the field is divided by the standard deviation in the x-direction before plotting
 
-        if left_mid is not None and right_mid is not None and top_mid is not None:
-            self.cutout=True
-        else:
-            self.cutout=False
+    # Viewing angles
+    azim: float = 25 # The azimuth angle to view the box from
+    elev: float = 10 # The elevation angle to view the box from
+    stretch: float = 0 # A factor by which to extend the faces in a cutout box
+
+    def __post_init__(self) -> None:
+        self.first: bool = True
+        self.cutout: bool = False
+        if self.left_mid is not None and self.right_mid is not None and self.top_mid is not None:
+            self.cutout = True
             
-    def _modify_field(self, field):
+    def _modify_field(self, field: np.ndarray) -> np.ndarray:
         """ Modify the field e.g., by removing its mean before plotting."""
 
         #TODO: add the ability to remove a universal x-mean and x-std.
@@ -196,16 +196,16 @@ class Box:
             field /= np.std(field, axis=0)
         return field
 
-    def _get_minmax(self, field):
+    def _get_minmax(self, field: np.ndarray) -> tuple[float, float]:
         """ Get the minimum and maximum values of the field. """
 
         vals = np.sort(field.flatten())
         if self.pos_def:
             vals = np.sort(vals)
             if np.mean(vals) < 0:
-                vmin, vmax = vals[int(self.cmap_exclusion*len(vals))], 0
+                vmin, vmax = vals[int(self.cmap_exclusion*len(vals))], 0.
             else:
-                vmin, vmax = 0, vals[int((1-self.cmap_exclusion)*len(vals))]
+                vmin, vmax = 0., vals[int((1-self.cmap_exclusion)*len(vals))]
         else:
             vals = np.sort(np.abs(vals))
             vmax = vals[int((1-self.cmap_exclusion)*len(vals))]
@@ -218,11 +218,18 @@ class Box:
 
         return vmin, vmax
 
-    def _setup_colorbar(self, cmap, cax, vmin, vmax):
+    def _setup_colorbar(
+            self, 
+            cmap: matplotlib.colors.Colormap, 
+            cax: matplotlib.axes.Axes,
+            vmin: float, 
+            vmax: float
+            ) -> matplotlib.colorbar.ColorbarBase:
         """ Setup the colorbar and label it."""
         norm = matplotlib.colors.Normalize(vmin=vmin, vmax=vmax)
 
         cb = matplotlib.colorbar.ColorbarBase(cax, cmap=cmap, norm=norm, orientation='horizontal')
+        assert cb.solids is not None, "ColorbarBase has no attribute 'solids'; something went wrong instantiating cbar."
         cb.solids.set_rasterized(True)
         cb.set_ticks(())
         cax.text(-0.01, 0.5, r'$_{{{:.2e}}}^{{{:.2e}}}$'.format(vmin, vmax), transform=cax.transAxes, ha='right', va='center')
@@ -231,25 +238,29 @@ class Box:
             cax.text(1.05, 0.5, '{:s}'.format(self.label), transform=cax.transAxes, va='center', ha='left')
         return cb 
 
-    def plot_colormesh(self, dsets, ni, engine='matplotlib', ax=None, cax=None, pl=None, distance=1.25, **kwargs):
+    def plot_colormesh(
+            self, 
+            dsets: dict[str, Union[h5py.Dataset, RolledDset]],
+            ni: int, 
+            engine: str = 'pyvista', 
+            ax: Optional[Axes3D] = None, 
+            cax: Optional[matplotlib.axes.Axes] = None, 
+            pl: Optional[pv.Plotter] = None, 
+            distance: float = 1.25, 
+            plot_kwargs: dict = {}
+            ) -> None:
         """ 
         Plot the box.
         
         Parameters
         ----------
-        dsets : dict of h5py datasets
-            The datasets to plot
-        ni : int
-            The index of the dataset to plot
-        engine : string, optional
-            The plotting engine to use; choose 'matplotlib' or 'pyvista'. Default is 'matplotlib'.
-        ax, cax : matplotlib axis objects, optional
-            The matplotlib axis to plot the volume render and colorbar on if engine is 'matplotlib'. Default is None.
-        pl : pyvista plotter object, optional
-            The pyvista plotter to plot the volume render on if engine is 'pyvista'. Default is None.
-        distance : float, optional
-            The distance from the camera to the box if engine is 'pyvista'. Default is 1.25.
-        **kwargs : keyword arguments
+        dsets : The datasets to plot
+        ni : The index of the dataset to plot
+        engine : The plotting engine to use; choose 'matplotlib' or 'pyvista'. Default is 'pyvista'.
+        ax, cax : The matplotlib axis to plot the volume render and colorbar on if engine is 'matplotlib'. Default is None.
+        pl : The pyvista plotter to plot the volume render on if engine is 'pyvista'. Default is None.
+        distance : The distance from the camera to the box if engine is 'pyvista'. Default is 1.25.
+        plot_kwargs : keyword arguments
             Additional keyword arguments to pass to the plotting function 
             Passes to ax.plot_surface if engine is 'matplotlib' or pl.add_mesh if engine is 'pyvista'.
         """
@@ -289,6 +300,7 @@ class Box:
         
         #If the box is cut out, get the fields for the mid planes.
         if self.cutout:
+            assert self.left_mid is not None and self.right_mid is not None and self.top_mid is not None, "left_mid, right_mid, and top_mid must be specified for a cutout box."
             mid_left_field = np.squeeze(dsets[self.left_mid][ni,:])
             mid_right_field = np.squeeze(dsets[self.right_mid][ni,:])
             mid_top_field = np.squeeze(dsets[self.top_mid][ni,:])
@@ -346,14 +358,16 @@ class Box:
                 z_max=np.nanmax(z)
 
             if engine == 'matplotlib':
+                assert ax is not None, "An Axes3D object must be passed to plot the box in matplotlib."
                 #Plot the surface using matplotlib; generally very slow, has issues if slices overlap.
-                surf = ax.plot_surface(x, y, z, facecolors=sfc, cstride=1, rstride=1, linewidth=0, antialiased=False, shade=False, **kwargs)
+                surf = ax.plot_surface(x, y, z, facecolors=sfc, cstride=1, rstride=1, linewidth=0, antialiased=False, shade=False, **plot_kwargs)
                 ax.plot_wireframe(x, y, z, ccount=1, rcount=1, linewidth=1, color='black')
             elif engine == 'pyvista':
+                assert pl is not None, "A pyvista plotter object must be passed to plot the box in pyvista."
                 #Plot the surface using pyvista; much faster, requires pyvista to be installed and newer architecture.
                 if self.first:
                     #Create the pyvista grid and plot the surface.
-                    pl.set_background('white', all_renderers=False)
+                    pl.set_background('white', all_renderers=False) #type: ignore
                     if i == 0:
                         try:
                             import pyvista as pv
@@ -361,7 +375,7 @@ class Box:
                             raise ImportError("PyVista must be installed for 3D pyvista plotting in plotpal")
                     grid = pv.StructuredGrid(x, y, z)
                     grid[self.label] = np.array(d['surfacecolor'].flatten(order='F'))
-                    mesh = pl.add_mesh(grid, scalars=self.label, cmap = self.cmap, clim = [vmin, vmax], scalar_bar_args={'color' : 'black'}, **kwargs)
+                    mesh = pl.add_mesh(grid, scalars=self.label, cmap = self.cmap, clim = [vmin, vmax], scalar_bar_args={'color' : 'black'}, **plot_kwargs)
                     self.pv_grids.append((grid, mesh))
                 else:
                     #Update the pyvista grid and scalar map range..
@@ -383,6 +397,8 @@ class Box:
 
         #Outline is currently only plotted for matplotlib.
         if engine == 'matplotlib':
+            assert ax is not None, "An Axes3D object must be passed to plot the box in matplotlib."
+            assert cax is not None, "An Axes object must be passed to plot the colorbar in matplotlib."
             if self.cutout:
                 ax.plot_wireframe(x_a, y_a, z_a, ccount=1, rcount=1, linewidth=1, color='black')
                 ax.plot_wireframe(x_b, y_b, z_b, ccount=1, rcount=1, linewidth=1, color='black')
@@ -397,8 +413,8 @@ class Box:
             ax.set_zticks([])
             cb = self._setup_colorbar(cmap, cax, vmin, vmax)
             self.first = False
-            return surf, cb
         elif engine == 'pyvista':
+            assert pl is not None, "A pyvista plotter object must be passed to plot the box in pyvista."
             if self.first:
                 #TODO: implement azim and elem. currently at default azim=elev=45 ?
                 pl.camera.position = tuple(distance*np.array(pl.camera.position))
@@ -407,86 +423,59 @@ class Box:
                 pl.update_scalar_bar_range([vmin, vmax], name=self.label)
 
             self.first = False
-            return
         else:
             raise ValueError("engine must be 'matplotlib' or 'pyvista'")
         
-
+@dataclass
 class CutSphere:
     """
     A class that plots Spherical surface renderings in 3D.
     """
+    # Basic fields required for a sphere
+    equator: list[str] # The name of the field(s) to plot on the equator
+    left_meridian: list[str] # The name of the field(s) to plot on the left meridian
+    right_meridian: list[str] # The name of the field(s) to plot on the right meridian
+    outer_shell: str # The name of the field to plot on the outer shell
 
-    def __init__(self, equator, left_meridian, right_meridian, outer_shell, inner_shell=None, vector_ind=None, view=0, 
-                 r_basis='r', phi_basis='phi',theta_basis='theta', max_r = None, r_inner = 0, cmap='RdBu_r', label=None,
-                 vmin=None, vmax=None, cmap_exclusion=0.005, pos_def=False, log=False,
-                 remove_mean=False, remove_radial_mean=False, divide_radial_stdev=False):
-        """
-        Initializes a CutSphere object
+    # Extra fields required for a cutout spherical shell
+    inner_shell: Optional[str] = None # The name of the field to plot on the inner shell
 
-        Arguments:
-        ----------
-        equator, left_meridian, right_meridian : strings or lists of strings
-            The names of the fields to plot on the equator, left meridina, and right meridian.
-            If a list of strings is given, the fields are assumed to be sequential fields in the radial direction.
-        outer_shell : string
-            The name of the field to plot on the outer shell.
-        inner_shell : string, optional
-            The name of the field to plot on the inner shell.
-        vector_ind : int, optional
-            If the field is a vector field, the index of the component to plot.
-        view : int, optional
-            The direction to view the sphere from. 0 is the default view, 1 is a 90 degree rotation, and so on.
-        r_basis, phi_basis, theta_basis : strings, optional
-            The names of the r-, phi-, and theta-bases to use for the sphere. Default is 'r', 'phi', and 'theta', respectively
-        max_r : float, optional
-            The maximum radius of the sphere to plot. If not specified, the maximum radius of the field is used.
-        r_inner : float, optional
-            The inner radius of the sphere data. Default is 0.
-        cmap : string, optional
-            The name of the colormap to use for the surfaces. Default is 'RdBu_r'
-        label : string, optional
-            The label to use for the colorbar. If not specified, the name of the field is used.
-        vmin, vmax : floats, optional
-            The minimum and maximum values to use for the colormap. If not specified, the minimum and maximum values of the field are used
-        cmap_exclusion : float, optional
-            The fraction of the colormap to exclude from the minimum and maximum values. Default is 0.005
-        log : bool, optional
-            If True, the colormap is plotted on a log scale. Default is False
-        pos_def : bool, optional
-            If True, the colormap is positive-definite. Default is False
-        remove_mean : bool, optional
-            If True, the mean of the field is subtracted from the field before plotting. Default is False
-        remove_radial_mean : bool, optional
-            If True, the radial mean of the field is subtracted from the field before plotting. Default is False
-        divide_radial_stdev : bool, optional
-            If True, the field is divided by the standard deviation in azimuth before plotting. Default is False        
-        """
-        self.equator, self.left_meridian, self.right_meridian, self.inner_shell, self.outer_shell = equator, left_meridian, right_meridian, inner_shell, outer_shell
-        self.vector_ind = vector_ind
-        self.view = view
-        self.r_basis, self.phi_basis, self.theta_basis = r_basis, phi_basis, theta_basis
-        self.max_r, self.r_inner = max_r, r_inner
-        self.cmap, self.label = cmap, label
-        self.vmin, self.vmax = vmin, vmax
-        self.cmap_exclusion = cmap_exclusion
-        self.log, self.pos_def = log, pos_def
-        self.remove_mean, self.remove_radial_mean, self.divide_radial_stdev = remove_mean, remove_radial_mean, divide_radial_stdev
+    # Viewing angles
+    view: int = 0 # The view to plot [0, 1, 2, 3]
+
+    # Basis names
+    r_basis: str = 'r'
+    phi_basis: str = 'phi'
+    theta_basis: str = 'theta'
+
+    vector_ind: Optional[int] = None # The index of the component to plot if the field is a vector field
+
+    # Boundaries
+    max_r: Optional[float] = None # The maximum radius of the sphere to plot
+    r_inner: float = 0 # The inner radius of the sphere data
+    
+    # Colormap information
+    cmap: str = 'RdBu_r' # The name of the colormap to use
+    label: str = 'field' # The label to use for the colorbar
+    vmin: Optional[np.ndarray] = None # The minimum value to use for the colormap
+    vmax: Optional[np.ndarray] = None # The maximum value to use for the colormap
+    cmap_exclusion: float = 0.005 # The fraction of the colormap to exclude from the minimum and maximum values
+
+    # Field modifications
+    log: bool = False # If True, the colormap is plotted on a log scale
+    pos_def: bool = False # If True, the colormap is positive-definite
+    remove_mean: bool = False # If True, the mean of the field is subtracted from the field before plotting
+    remove_radial_mean: bool = False # If True, the (phi,theta) average of the field is subtracted from the field before plotting
+    divide_radial_stdev: bool = False # If True, the field is divided by the standard deviation in (phi,theta) before plotting
 
 
+
+    def __post_init__(self) -> None:
         self.first = True
-        if label is None:
-            self.label = 'field'
-        self.radial_mean = None # will be computed in the equatorial slice
-        self.radial_stdev = None # will be computed in the equatorial slice
-
-        # make sure that equator, left_meridian, and right_meridian are lists
-        if isinstance(self.equator, str):
-            self.equator = [self.equator,]
-            self.left_meridian = [self.left_meridian,]
-            self.right_meridian = [self.right_meridian,]
+        self.radial_mean: Optional[np.ndarray] = None # will be computed in the equatorial slice
+        self.radial_stdev: Optional[np.ndarray] = None # will be computed in the equatorial slice
         
-    def _modify_field(self, field):
+    def _modify_field(self, field: np.ndarray) -> np.ndarray:
         """ Applies the specified modifications to the field """
         if self.log: 
             field = np.log10(np.abs(field))
@@ -498,7 +487,7 @@ class CutSphere:
             field /= self.radial_stdev
         return field
 
-    def _get_minmax(self, field):
+    def _get_minmax(self, field: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         """ Finds the minimum and maximum values of the field. """
         vals = np.sort(field.flatten())
         if self.pos_def:
@@ -512,22 +501,24 @@ class CutSphere:
             vmax = vals[int((1-self.cmap_exclusion)*len(vals))]
             vmin = -vmax
 
-        return vmin, vmax
+        return np.array([vmin,]), np.ndarray([vmax,])
 
-    def plot_colormesh(self, dsets, ni, pl, **kwargs):
+    def plot_colormesh(
+            self, 
+            dsets: dict[str, Union[h5py.Dataset, RolledDset]],
+            ni: int, 
+            pl: pv.Plotter, 
+            extra_kwargs: dict = {}
+            ) -> None:
         """ 
         Plot the CutSphere.
         
         Parameters
         ----------
-        dsets : dict of h5py datasets
-            The datasets to plot
-        ni : int
-            The index of the dataset to plot
-        pl : pyvista plotter object
-            The pyvista plotter to plot the volume render on if engine is 'pyvista'.
-        **kwargs : keyword arguments
-            Additional keyword arguments to pass to the pl.add_mesh function.
+        dsets : The datasets to plot
+        ni : The index of the dataset to plot
+        pl : The pyvista plotter to plot the volume render on if engine is 'pyvista'.
+        extra_kwargs : Additional keyword arguments to pass to the pl.add_mesh function.
         """        
         if self.first:
             #Read spherical coordinates
@@ -564,10 +555,10 @@ class CutSphere:
             phi_vert_out, theta_vert_out, r_vert_out = build_spherical_vertices(self.shell_phi, self.shell_theta, self.r, self.r_inner, self.r_outer)
             phi_vert_in, theta_vert_in, r_vert_in = build_spherical_vertices(self.shell_phi, self.shell_theta, self.r, self.r_inner, self.r_outer)
             theta_mer = np.concatenate([-self.theta, self.theta[::-1]])
-            self.x_out, self.y_out, self.z_out = spherical_to_cartesian(phi_vert_out, theta_vert_out, [self.r_outer,])[:,:,:,0]
-            self.x_in, self.y_in, self.z_in = spherical_to_cartesian(phi_vert_in, theta_vert_in, [self.r_inner,])[:,:,:,0]
-            self.x_eq, self.y_eq, self.z_eq = spherical_to_cartesian(phi_vert, [np.pi/2,], r_vert)[:,:,0,:]
-            self.x_mer, self.y_mer, self.z_mer = spherical_to_cartesian([phi_mer1,], theta_mer, r_vert)[:,0,:,:]
+            self.x_out, self.y_out, self.z_out = spherical_to_cartesian(phi_vert_out, theta_vert_out, np.array([self.r_outer,]))[:,:,:,0]
+            self.x_in, self.y_in, self.z_in = spherical_to_cartesian(phi_vert_in, theta_vert_in, np.array([self.r_inner,]))[:,:,:,0]
+            self.x_eq, self.y_eq, self.z_eq = spherical_to_cartesian(phi_vert, np.array([np.pi/2,]), r_vert)[:,:,0,:]
+            self.x_mer, self.y_mer, self.z_mer = spherical_to_cartesian(np.array([phi_mer1,]), theta_mer, r_vert)[:,0,:,:]
 
             #Create boolean arrays that pick out the correct slices according to the specified view.
             mer_pick = self.z_mer >= 0
@@ -617,10 +608,10 @@ class CutSphere:
             pl.camera.position = np.array((1,-1,1))*camera_distance
         
         # Build radial mean and stdev & get equatorial field
-        eq_field = []
+        eq_field_list = []
         for fd in self.equator:
-            eq_field.append(dsets[fd][ni].squeeze())
-        eq_field = np.concatenate(eq_field, axis=-1)
+            eq_field_list.append(dsets[fd][ni].squeeze())
+        eq_field = np.concatenate(eq_field_list, axis=-1)
         self.radial_mean = np.expand_dims(np.mean(eq_field, axis = 0), axis = 0)
         self.radial_stdev = np.expand_dims(np.std(eq_field, axis = 0), axis = 0)
         self.radial_mean_func = interp1d(self.r_full, self.radial_mean.squeeze(), kind='linear', bounds_error=False, fill_value='extrapolate')
@@ -638,13 +629,13 @@ class CutSphere:
         self.eq_data['field'] = np.pad(eq_field.squeeze()[:, self.r_full <= self.r_outer], ((1,0), (1,0)), mode = 'edge')
 
         # Build meridian field -- constructs 2pi circle from left and right meridian.
-        mer_left_field = []
-        mer_right_field = []
+        mer_left_field_list = []
+        mer_right_field_list = []
         for left, right in zip(self.left_meridian, self.right_meridian):
-            mer_left_field.append(dsets[left][ni].squeeze())
-            mer_right_field.append(dsets[right][ni].squeeze())
-        mer_left_field = np.concatenate(mer_left_field, axis=-1)
-        mer_right_field = np.concatenate(mer_right_field, axis=-1)
+            mer_left_field_list.append(dsets[left][ni].squeeze())
+            mer_right_field_list.append(dsets[right][ni].squeeze())
+        mer_left_field = np.concatenate(mer_left_field_list, axis=-1)
+        mer_right_field = np.concatenate(mer_right_field_list, axis=-1)
         mer_left_field = self._modify_field(mer_left_field)
         mer_right_field = self._modify_field(mer_right_field)
         mer_left_field = mer_left_field.squeeze()[:, self.r_full <= self.r_outer]
@@ -671,12 +662,7 @@ class CutSphere:
 
 
         # Get min and max values for colorbar
-        if self.first:
-            self.vmin, self.vmax = self._get_minmax(self.eq_data['field'])
-            self.vmin = np.array([self.vmin])
-            self.vmax = np.array([self.vmax])
-        else:
-            self.vmin[0], self.vmax[0] = self._get_minmax(self.eq_data['field'])
+        self.vmin, self.vmax = self._get_minmax(self.eq_data['field'])
         cmap = matplotlib.cm.get_cmap(self.cmap)
         
         self.data_dicts = [self.out_data, self.mer_data, self.eq_data]
@@ -685,7 +671,7 @@ class CutSphere:
             
 
         # Loop over each slice and plot the data.
-        pl.set_background('white', all_renderers=False)
+        pl.set_background('white', all_renderers=False) #type: ignore
         for i, d in enumerate(self.data_dicts):
             if i == 0: 
                 label = self.label
@@ -707,9 +693,9 @@ class CutSphere:
                 d['grid'] = grid
                 d['clip'] = clipped
                 if i == 0:
-                    d['mesh'] = pl.add_mesh(d['clip'], scalars=label, cmap=cmap, clim=[self.vmin, self.vmax], opacity=1.0, show_scalar_bar=True, scalar_bar_args={'color' : 'black'}, **kwargs)
+                    d['mesh'] = pl.add_mesh(d['clip'], scalars=label, cmap=cmap, clim=[self.vmin, self.vmax], opacity=1.0, show_scalar_bar=True, scalar_bar_args={'color' : 'black'}, **extra_kwargs)
                 else:
-                    d['mesh'] = pl.add_mesh(d['clip'], scalars=label, cmap=cmap, clim=[self.vmin, self.vmax], opacity=1.0, show_scalar_bar=False, **kwargs)
+                    d['mesh'] = pl.add_mesh(d['clip'], scalars=label, cmap=cmap, clim=[self.vmin, self.vmax], opacity=1.0, show_scalar_bar=False, **extra_kwargs)
             else:
                 #Just update the data after the first plot.
                 d['grid'][label] = d['field'].ravel(order='F')
@@ -728,29 +714,51 @@ class BoxPlotter(SingleTypeReader):
     A class for plotting 3D boxes of dedalus data using matplotlib.
     """
 
-    def __init__(self, *args, **kwargs):
+    def __init__(
+            self, 
+            run_dir: str, 
+            sub_dir: str, 
+            out_name: str, 
+            distribution: str = 'even-write',
+            num_files: Optional[int] = None, 
+            roll_writes: Optional[int] = None,
+            start_file: int = 1,
+            global_comm: MPI.Intracomm = MPI.COMM_WORLD,
+            chunk_size: int = 1000
+            ):
         """
         Initializes the box plotter.
         """
-        self.grid = None
-        super(BoxPlotter, self).__init__(*args, distribution='even-write', **kwargs)
+        self.grid: Optional[Union[PlotGrid, PyVista3DPlotGrid]] = None
+        super(BoxPlotter, self).__init__(
+            run_dir=run_dir,
+            sub_dir=sub_dir,
+            out_name=out_name,
+            distribution=distribution,
+            num_files=num_files,
+            roll_writes=roll_writes,
+            start_file=start_file,
+            global_comm=global_comm,
+            chunk_size=chunk_size
+        )
         self.counter = 0
-        self.boxes = []   
+        self.boxes: list[tuple[int, Box]] = []   
 
-    def setup_grid(self, *args, **kwargs):
+    def setup_grid(self, *args, **kwargs) -> None:
         """ Initialize the plot grid for the colormeshes """
         self.grid = RegularColorbarPlotGrid(*args, **kwargs, threeD=True)
 
-    def add_box(self, *args, **kwargs):
+    def add_box(self, *args, **kwargs) -> None:
         self.boxes.append((self.counter, Box(*args, **kwargs)))
         self.counter += 1
     
-    def add_cutout_box(self, *args, **kwargs):
+    def add_cutout_box(self, *args, **kwargs) -> None:
         self.boxes.append((self.counter, Box(*args, **kwargs)))
         self.counter += 1
 
-    def _groom_grid(self):
+    def _groom_grid(self) -> tuple[list[Axes3D], list[matplotlib.axes.Axes]]:
         """ Assign boxes to axes subplots in the plot grid """
+        assert isinstance(self.grid, PlotGrid), "The plot grid must be initialized before plotting."
         axs, caxs = [], []
         for nr in range(self.grid.nrows):
             for nc in range(self.grid.ncols):
@@ -760,7 +768,7 @@ class BoxPlotter(SingleTypeReader):
                     caxs.append(self.grid.cbar_axes[k])
         return axs, caxs
    
-    def plot_boxes(self, start_fig=1, dpi=200, **kwargs):
+    def plot_boxes(self, start_fig: int = 1, dpi: int = 200, extra_kwargs: dict = {}) -> None:
         """
         Plot figures of the 3D boxes at each timestep.
 
@@ -772,7 +780,7 @@ class BoxPlotter(SingleTypeReader):
             kwargs :
                 extra keyword args for matplotlib.pyplot.pcolormesh
         """
-        
+        assert isinstance(self.grid, PlotGrid), "The plot grid must be initialized before plotting."
         with self.my_sync:
             axs, caxs = self._groom_grid()
             tasks = []
@@ -784,11 +792,11 @@ class BoxPlotter(SingleTypeReader):
                 if bx.top not in tasks:
                     tasks.append(bx.top)
                 if bx.cutout:
-                    if bx.left_mid not in tasks:
+                    if bx.left_mid not in tasks and bx.left_mid is not None:
                         tasks.append(bx.left_mid)
-                    if bx.right_mid not in tasks:
+                    if bx.right_mid not in tasks and bx.right_mid is not None:
                         tasks.append(bx.right_mid)
-                    if bx.top_mid not in tasks:
+                    if bx.top_mid not in tasks and bx.top_mid is not None:
                         tasks.append(bx.top_mid)
             if self.idle: return
 
@@ -801,7 +809,7 @@ class BoxPlotter(SingleTypeReader):
                 for k, bx in self.boxes:
                     ax = axs[k]
                     cax = caxs[k]
-                    bx.plot_colormesh(dsets, ni, ax=ax, cax=cax, **kwargs)
+                    bx.plot_colormesh(dsets, ni, ax=ax, cax=cax, plot_kwargs=extra_kwargs)
 
                 plt.suptitle('t = {:.4e}'.format(time_data['sim_time'][ni]))
                
@@ -811,24 +819,16 @@ class PyVistaBoxPlotter(BoxPlotter):
     """
     A class for plotting 3D boxes of dedalus data. Uses PyVista as a plotting engine rather than matplotlib.
     """
-        
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
             
     def setup_grid(self, **kwargs):
         """ Initialize the plot grid  """
         self.grid = PyVista3DPlotGrid(**kwargs)
     
-    def add_box(self, *args, **kwargs):
-        super().add_box(*args, **kwargs)
-    
-    def add_cutout_box(self, *args, **kwargs):
-        super().add_cutout_box(*args, **kwargs)
-    
-    def plot_boxes(self, start_fig=1, **kwargs):
+    def plot_boxes(self, start_fig: int = 1, extra_kwargs: dict = {}) -> None: #type: ignore
         """
         Plot 3D renderings of 2D dedalus data slices at each timestep.
         """
+        assert isinstance(self.grid, PyVista3DPlotGrid), "The plot grid must be initialized before plotting."
         with self.my_sync:
             tasks = []
             for k, bx in self.boxes:
@@ -839,21 +839,22 @@ class PyVistaBoxPlotter(BoxPlotter):
                 if bx.top not in tasks:
                     tasks.append(bx.top)
                 if bx.cutout:
-                    if bx.left_mid not in tasks:
+                    if bx.left_mid not in tasks and bx.left_mid is not None:
                         tasks.append(bx.left_mid)
-                    if bx.right_mid not in tasks:
+                    if bx.right_mid not in tasks and bx.right_mid is not None:
                         tasks.append(bx.right_mid)
-                    if bx.top_mid not in tasks:
+                    if bx.top_mid not in tasks and bx.top_mid is not None:
                         tasks.append(bx.top_mid)
             if self.idle: return
 
             while self.writes_remain():
                 dsets, ni = self.get_dsets(tasks)
+                assert isinstance(self.current_file_handle, h5py.File), "The current file handle must be an h5py file."
                 time_data = self.current_file_handle['scales']
 
                 for k, bx in self.boxes:
                     self.grid.change_focus_single(k)
-                    bx.plot_colormesh(dsets, ni, pl=self.grid.pl, engine='pyvista', **kwargs)
+                    bx.plot_colormesh(dsets, ni, pl=self.grid.pl, engine='pyvista', plot_kwargs=extra_kwargs)
 
                 self.grid.change_focus_single(0)
                 titleactor = self.grid.pl.add_title('t={:.4e}'.format(time_data['sim_time'][ni]), color='black')
@@ -866,22 +867,19 @@ class PyVistaSpherePlotter(PyVistaBoxPlotter):
     A class for plotting 3D spheres of dedalus data. Uses PyVista as a plotting engine.
     """
     
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.spheres = []
+    def __init__(self, *args, **kwargs) -> None: #type: ignore
+        super().__init__(*args, **kwargs) #type: ignore
+        self.spheres: list[tuple[int, CutSphere]] = []
             
-    def setup_grid(self, **kwargs):
-        """ Initialize the plot grid  """
-        self.grid = PyVista3DPlotGrid(**kwargs)
-    
-    def add_sphere(self, *args, **kwargs):
+    def add_sphere(self, *args, **kwargs) -> None:
         self.spheres.append((self.counter, CutSphere(*args, **kwargs)))
         self.counter += 1
 
-    def plot_spheres(self, start_fig=1, **kwargs):
+    def plot_spheres(self, start_fig: int = 1, **kwargs):
         """
         Plot 3D renderings of 2D dedalus data slices at each timestep.
         """
+        assert isinstance(self.grid, PyVista3DPlotGrid), "The plot grid must be initialized before plotting."
         with self.my_sync:
             tasks = []
             for k, sp in self.spheres:
@@ -895,6 +893,7 @@ class PyVistaSpherePlotter(PyVistaBoxPlotter):
 
             while self.writes_remain():
                 dsets, ni = self.get_dsets(tasks)
+                assert isinstance(self.current_file_handle, h5py.File), "The current file handle must be an h5py file."
                 time_data = self.current_file_handle['scales']
 
                 for k, sp in self.spheres:
@@ -902,6 +901,6 @@ class PyVistaSpherePlotter(PyVistaBoxPlotter):
                     sp.plot_colormesh(dsets, ni, pl=self.grid.pl, **kwargs)
                 
                 self.grid.change_focus_single(0)
-                titleactor = self.grid.pl.add_title('t={:.4e}'.format(time_data['sim_time'][ni]), color='black', font_size=self.grid.size*0.02)
+                # titleactor = self.grid.pl.add_title('t={:.4e}'.format(time_data['sim_time'][ni]), color='black', font_size=self.grid.size*0.02)
 
                 self.grid.save('{:s}/{:s}_{:06d}.png'.format(self.out_dir, self.out_name, int(time_data['write_number'][ni]+start_fig-1)))
