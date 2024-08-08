@@ -16,25 +16,42 @@ Options:
     --col_inch=<float>     Figure width (inches) [default: 3]
     --row_inch=<float>     Figure height (inches) [default: 2]
 """
+
 from docopt import docopt
+
 args = docopt(__doc__)
 from plotpal.profiles import RolledProfilePlotter
 
-root_dir    = args['--root_dir']
-data_dir    = args['--data_dir']
-start_file  = int(args['--start_file'])
-subdir_name    = args['--subdir_name']
-dpi         = int(args['--dpi'])
-n_files     = args['--n_files']
-if n_files is not None: 
+root_dir = args["--root_dir"]
+data_dir = args["--data_dir"]
+start_file = int(args["--start_file"])
+subdir_name = args["--subdir_name"]
+dpi = int(args["--dpi"])
+n_files = args["--n_files"]
+if n_files is not None:
     n_files = int(n_files)
 
-roll_writes = int(args['--roll_writes']) #rolling uses this many writes before AND after the current write, so 2x this many total.
+roll_writes = int(
+    args["--roll_writes"]
+)  # rolling uses this many writes before AND after the current write, so 2x this many total.
 
 # Create Plotter object, tell it which fields to plot
-plotter = RolledProfilePlotter(root_dir, file_dir=data_dir, out_name=subdir_name, roll_writes=roll_writes, start_file=start_file, n_files=n_files)
-plotter.setup_grid(num_rows=2, num_cols=1, col_inch=float(args['--col_inch']), row_inch=float(args['--row_inch']), pad_factor=15)
-plotter.add_line('z', 'b', grid_num=0)
-plotter.add_line('z', 'cond_flux', grid_num=1)
-plotter.add_line('z', 'conv_flux', grid_num=1)
+plotter = RolledProfilePlotter(
+    root_dir,
+    file_dir=data_dir,
+    out_name=subdir_name,
+    roll_writes=roll_writes,
+    start_file=start_file,
+    n_files=n_files,
+)
+plotter.setup_grid(
+    num_rows=2,
+    num_cols=1,
+    col_inch=float(args["--col_inch"]),
+    row_inch=float(args["--row_inch"]),
+    pad_factor=15,
+)
+plotter.add_line("z", "b", grid_num=0)
+plotter.add_line("z", "cond_flux", grid_num=1)
+plotter.add_line("z", "conv_flux", grid_num=1)
 plotter.plot_lines(dpi=dpi)
