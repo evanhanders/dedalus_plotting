@@ -1,19 +1,15 @@
-import os
 import logging
 from collections import OrderedDict
 from sys import stdout
-from sys import path
+from typing import Optional
 
 import numpy as np
-import h5py
+import h5py #type: ignore
 from mpi4py import MPI
-from scipy.interpolate import RegularGridInterpolator
+from scipy.interpolate import RegularGridInterpolator #type: ignore
 import matplotlib
 matplotlib.use('Agg')
-import matplotlib.pyplot as plt
 matplotlib.rcParams.update({'font.size': 9})
-
-from dedalus.tools.parallel import Sync
 
 from plotpal.file_reader import SingleTypeReader, match_basis
 from plotpal.plot_grid import RegularPlotGrid
@@ -30,16 +26,36 @@ class PdfPlotter(SingleTypeReader):
     that basis is evenly interpolated to avoid skewing of the distribution by uneven grid sampling.
     """
 
-    def __init__(self, *args, **kwargs):
+    def __init__(
+            self, 
+            run_dir: str, 
+            sub_dir: str, 
+            out_name: str, 
+            distribution: str = 'even-write',
+            num_files: Optional[int] = None, 
+            roll_writes: Optional[int] = None,
+            start_file: int = 1,
+            global_comm: MPI.Intracomm = MPI.COMM_WORLD,
+            chunk_size: int = 1000
+    ):
         """
         Initializes the PDF plotter.
         """
-        super(PdfPlotter, self).__init__(*args, distribution='even-write', **kwargs)
-        self.pdfs = OrderedDict()
-        self.pdf_stats = OrderedDict()
+        super(PdfPlotter, self).__init__(
+            run_dir=run_dir,
+            sub_dir=sub_dir,
+            out_name=out_name,
+            distribution=distribution,
+            num_files=num_files,
+            roll_writes=roll_writes,
+            start_file=start_file,
+            global_comm=global_comm,
+            chunk_size=chunk_size
+        )
+        self.pdfs: dict[str, tuple[np.ndarray, np.ndarray, np.ndarray]] = OrderedDict()
+        self.pdf_stats: dict[str, tuple[float, float, float, float]] = OrderedDict()
 
-
-    def _calculate_pdf_statistics(self):
+    def _calculate_pdf_statistics(self) -> None:
         """ Calculate statistics of the PDFs stored in self.pdfs. Store results in self.pdf_stats. """
         for k, data in self.pdfs.items():
             pdf, x_vals, dx = data
@@ -51,17 +67,19 @@ class PdfPlotter(SingleTypeReader):
             self.pdf_stats[k] = (mean, stdev, skew, kurt)
 
     
-    def _get_interpolated_slices(self, dsets, ni, uneven_basis=None):
+    def _get_interpolated_slices(
+            self, 
+            dsets: dict[str, h5py.Dataset],
+            ni: int, 
+            uneven_basis: Optional[str] = None
+            ) -> dict[str, np.ndarray]:
         """
         For 2D data on an uneven grid, interpolates that data on to an evenly spaced grid.
 
         # Arguments
-            dsets (dict) :
-                A dictionary of links to dedalus output tasks in hdf5 files.
-            ni (int) :
-                The index of the slice to be interpolate.
-            uneven_basis (string, optional) :
-                The basis on which the grid has uneven spacing.
+            dsets : A dictionary of links to dedalus output tasks in hdf5 files.
+            ni : The index of the slice to be interpolate.
+            uneven_basis : The basis on which the grid has uneven spacing.
         """
         #Read data
         bases = self.current_bases
@@ -87,17 +105,19 @@ class PdfPlotter(SingleTypeReader):
 
         return file_data
 
-    def _get_interpolated_volumes(self, dsets, ni, uneven_basis=None):
+    def _get_interpolated_volumes(
+            self, 
+            dsets: dict[str, h5py.Dataset],
+            ni: int, 
+            uneven_basis: Optional[str] = None
+            ) -> dict[str, np.ndarray]:
         """
         For 3D data on an uneven grid, interpolates that data on to an evenly spaced grid.
 
         # Arguments
-            dsets (dict) :
-                A dictionary of links to dedalus output tasks in hdf5 files.
-            ni (int) :
-                The index of the field to be interpolate.
-            uneven_basis (string, optional) :
-                The basis on which the grid has uneven spacing.
+            dsets : A dictionary of links to dedalus output tasks in hdf5 files.
+            ni : The index of the field to be interpolate.
+            uneven_basis : The basis on which the grid has uneven spacing.
         """
         #Read data
         bases = self.current_bases
@@ -142,29 +162,28 @@ class PdfPlotter(SingleTypeReader):
                     print('interpolating {} ({}/{})...'.format(k, i+1, file_data[k].shape[0]))
                     stdout.flush()
                 if uneven_index is None:
-                    file_data[k][i,:] = tdsets[k][ni][i,:]
+                    file_data[k][i,:] = dsets[k][ni][i,:]
                 elif uneven_index == 2:
                     for j in range(file_data[k].shape[-2]): # loop over y
-                        interp = RegularGridInterpolator((x.flatten(), z.flatten()), tsk[k][i,:,j,:], method='linear')
+                        interp = RegularGridInterpolator((x.flatten(), z.flatten()), dsets[k][i,:,j,:], method='linear')
                         file_data[k][i,:,j,:] = interp((exx, ezz))
                 else:
                     for j in range(file_data[k].shape[-1]): # loop over z
-                        interp = RegularGridInterpolator((x.flatten(), y.flatten()), tsk[k][i,:,:,j], method='linear')
+                        interp = RegularGridInterpolator((x.flatten(), y.flatten()), dsets[k][i,:,:,j], method='linear')
                         file_data[k][i,:,:,j] = interp((exx, eyy))
 
         return file_data
 
-    def _get_bounds(self, pdf_list):
+    def _get_bounds(self, pdf_list: list[str]) -> dict[str, np.ndarray]:
         """
         Finds the global minimum and maximum value of fields for determing PDF range.
 
         Arguments
         ---------
-        pdf_list : list
-            A list of fields for which to calculate the global minimum and maximum.
+        pdf_list : A list of fields for which to calculate the global minimum and maximum.
         """    
         with self.my_sync:
-            if self.idle : return
+            if self.idle : return {}
 
             bounds = OrderedDict()
             for field in pdf_list:
@@ -195,7 +214,14 @@ class PdfPlotter(SingleTypeReader):
             return bounds
 
 
-    def calculate_pdfs(self, pdf_list, bins=100, threeD=False, bases=['x', 'z'], **kwargs):
+    def calculate_pdfs(
+            self, 
+            pdf_list: list[str], 
+            bins: int = 100, 
+            threeD: bool = False, 
+            bases: list[str]=['x', 'z'], 
+            uneven_basis: Optional[str] = None,
+            ) -> None:
         """
         Calculate probability distribution functions of the specified tasks.
 
@@ -206,10 +232,9 @@ class PdfPlotter(SingleTypeReader):
                 The number of bins the PDF (histogram) should have
             threeD (bool, optional) :
                 If True, find PDF of a 3D volume
-            bases (list, optional) :
-                A list of strings of the bases over which the simulation information spans. 
+            bases : A list of strings of the bases over which the simulation information spans. 
                 Should have 2 elements if threeD is False, 3 elements if threeD is True.
-            **kwargs : additional keyword arguments for the self._get_interpolated_slices() function.
+            uneven_basis : The basis on which the grid has uneven spacing, if any.
         """
         self.current_bases = bases
         bounds = self._get_bounds(pdf_list)
@@ -228,13 +253,13 @@ class PdfPlotter(SingleTypeReader):
 
                 # Interpolate data onto a regular grid
                 if threeD:
-                    file_data = self._get_interpolated_volumes(dsets, ni, **kwargs)
+                    file_data = self._get_interpolated_volumes(dsets, ni, uneven_basis=uneven_basis)
                 else:
-                    file_data = self._get_interpolated_slices(dsets, ni, **kwargs)
+                    file_data = self._get_interpolated_slices(dsets, ni, uneven_basis=uneven_basis)
 
                 # Create histograms of data
                 for field in pdf_list:
-                    hist, bin_vals = np.histogram(file_data[field], bins=bins, range=bounds[field])
+                    hist, bin_vals = np.histogram(file_data[field], bins=bins, range=tuple(bounds[field]))
                     histograms[field] += hist
                     bin_edges[field] = bin_vals
 
@@ -254,19 +279,35 @@ class PdfPlotter(SingleTypeReader):
             self._calculate_pdf_statistics()
         
 
-    def plot_pdfs(self, dpi=150, **kwargs):
+    def plot_pdfs(
+            self, 
+            dpi: int = 150, 
+            col_inch: float = 3, 
+            row_inch: float = 3, 
+            ) -> None:
         """
         Plot the probability distribution functions and save them to file.
 
         # Arguments
-            dpi (int, optional) :
-                Pixel density of output image.
-            **kwargs : additional keyword arguments for RegularPlotGrid()
+            dpi :  Pixel density of output image.
+            col_inch : Width of each column in inches.
+            row_inch : Height of each row in inches.
         """
         with self.my_sync:
             if self.comm.rank != 0: return
 
-            grid = RegularPlotGrid(num_rows=1,num_cols=1, **kwargs)
+            grid = RegularPlotGrid(
+                num_rows=1,
+                num_cols=1, 
+                cbar=False,
+                polar=False,
+                mollweide=False,
+                orthographic=False,
+                threeD=False,
+                col_inch=col_inch,
+                row_inch=row_inch,
+                pad_factor=10
+                )
             ax = grid.axes['ax_0-0']
             
             for k, data in self.pdfs.items():
@@ -290,7 +331,7 @@ class PdfPlotter(SingleTypeReader):
 
             self._save_pdfs()
 
-    def _save_pdfs(self):
+    def _save_pdfs(self) -> None:
         """ 
         Save PDFs to file. For each PDF, e.g., 'entropy' and 'w', the file will have a dataset with:
             xs  - the x-values of the PDF
@@ -303,8 +344,8 @@ class PdfPlotter(SingleTypeReader):
                     pdf, xs, dx = data
                     this_group = f.create_group(k)
                     for d, n in ((pdf, 'pdf'), (xs, 'xs')):
-                        dset = this_group.create_dataset(name=n, shape=d.shape, dtype=np.float64)
+                        this_group.create_dataset(name=n, shape=d.shape, dtype=np.float64)
                         f['{:s}/{:s}'.format(k, n)][:] = d
-                    dset = this_group.create_dataset(name='dx', shape=(1,), dtype=np.float64)
+                    this_group.create_dataset(name='dx', shape=(1,), dtype=np.float64)
                     f['{:s}/dx'.format(k)][0] = dx
 

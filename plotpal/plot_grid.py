@@ -149,7 +149,7 @@ class RegularPlotGrid(PlotGrid):
                 self.add_axis(row_num=i, col_num=j, row_span=1, col_span=1, cbar=cbar, polar=polar, mollweide=mollweide, orthographic=orthographic, threeD=threeD)
         self.make_subplots()
 
-def RegularColorbarPlotGrid(*args, **kwargs):
+def RegularColorbarPlotGrid(*args, **kwargs): #type: ignore
     kwargs['cbar'] = True
     return RegularPlotGrid(*args, **kwargs)
 
@@ -176,20 +176,20 @@ class PyVista3DPlotGrid:
         except ImportError:
             raise ImportError("PyVista must be installed for 3D pyvista plotting in plotpal")
 
-        self.pl = pv.Plotter(off_screen=True, shape=(num_rows, num_cols))
+        self.pl = pv.Plotter(off_screen=True, shape=(num_rows, num_cols)) # type: ignore
         self.num_rows     = num_rows   
         self.num_cols     = num_cols   
         self.size = size
 
     def change_focus(self, row: int, col: int) -> None:
         """ Focus on a particular plot in the grid; row and col are 0-indexed """
-        self.pl.subplot(row, col)
+        self.pl.subplot(row, col) # type: ignore
     
     def change_focus_single(self, index: int) -> None:
         """ Focus on a particular plot in the grid; indexed from left to right, top to bottom """
         row = index // self.num_cols
         col = index % self.num_cols
-        self.change_focus(row, col)
+        self.change_focus(row, col) 
 
     def save(self, filename: str) -> None:
-        self.pl.screenshot(filename=filename, window_size=[self.num_cols*self.size, self.num_rows*self.size])
+        self.pl.screenshot(filename=filename, window_size=[self.num_cols*self.size, self.num_rows*self.size]) # type: ignore

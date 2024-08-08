@@ -216,7 +216,7 @@ class ProfileLine:
 
 class RolledProfilePlotter(SingleTypeReader):
     """ 
-    A class for stepping through each profile in an IVP's output and plotting rolled
+    A class for stepping through each profile in an IVP's output and plotting line plots of rolled
     averages to reduce noise and see evolution. Includes functionality to save the averaged
     profiles to hdf5 files and plot them. 
     """
@@ -249,9 +249,26 @@ class RolledProfilePlotter(SingleTypeReader):
         self.tasks: list[str] = []
         self.color_ind = 0
 
-    def setup_grid(self, *args, **kwargs) -> None:
-        """ Initialize the plot grid for the colormeshes """
-        self.grid: PlotGrid = RegularPlotGrid(*args, **kwargs) # type: ignore
+    def setup_grid(self, 
+            num_rows: int = 1, 
+            num_cols: int = 1, 
+            col_inch: float = 3, 
+            row_inch: float = 3, 
+            pad_factor: float = 10
+            ) -> None:
+        """ Initialize the plot grid for the line plots """
+        self.grid: PlotGrid = RegularPlotGrid(
+            num_rows=num_rows, 
+            num_cols=num_cols, 
+            cbar=False, 
+            polar=False, 
+            mollweide=False, 
+            orthographic=False, 
+            threeD=False,
+            col_inch=col_inch, 
+            row_inch=row_inch, 
+            pad_factor=pad_factor 
+        )
 
     def use_custom_grid(self, custom_grid: PlotGrid) -> None:
         """ Allows user to pass in a custom PlotGrid object. """
