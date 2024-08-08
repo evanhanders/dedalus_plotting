@@ -16,23 +16,42 @@ Options:
     --fig_width=<float>        Figure width (inches) [default: 6]
     --fig_height=<float>       Figure height (inches) [default: 3]
 """
+
 from docopt import docopt
+
 args = docopt(__doc__)
 from plotpal.profiles import AveragedProfilePlotter
 
-root_dir    = args['--root_dir']
-data_dir    = args['--data_dir']
-start_file  = int(args['--start_file'])
-writes_per_avg = int(args['--writes_per_avg'])
-subdir_name    = args['--subdir_name']
-n_files     = args['--n_files']
-if n_files is not None: 
+root_dir = args["--root_dir"]
+data_dir = args["--data_dir"]
+start_file = int(args["--start_file"])
+writes_per_avg = int(args["--writes_per_avg"])
+subdir_name = args["--subdir_name"]
+n_files = args["--n_files"]
+if n_files is not None:
     n_files = int(n_files)
 
 # Create Plotter object, tell it which fields to plot
-plotter = AveragedProfilePlotter(root_dir, writes_per_avg=writes_per_avg, file_dir=data_dir, out_name=subdir_name, start_file=start_file, n_files=n_files)
-plotter_kwargs = { 'fig_width' : int(args['--fig_width']), 'fig_height' : int(args['--fig_height']) }
-plotter.add_average_plot(x_basis='r', y_tasks='T profile', name='T_vs_r', **plotter_kwargs)
-plotter.add_average_plot(x_basis='r', y_tasks=('conv luminosity', 'cond luminosity'), name='lum_vs_r', **plotter_kwargs)
+plotter = AveragedProfilePlotter(
+    root_dir,
+    writes_per_avg=writes_per_avg,
+    file_dir=data_dir,
+    out_name=subdir_name,
+    start_file=start_file,
+    n_files=n_files,
+)
+plotter_kwargs = {
+    "fig_width": int(args["--fig_width"]),
+    "fig_height": int(args["--fig_height"]),
+}
+plotter.add_average_plot(
+    x_basis="r", y_tasks="T profile", name="T_vs_r", **plotter_kwargs
+)
+plotter.add_average_plot(
+    x_basis="r",
+    y_tasks=("conv luminosity", "cond luminosity"),
+    name="lum_vs_r",
+    **plotter_kwargs,
+)
 
-plotter.plot_average_profiles(dpi=int(args['--dpi']), save_data=True)
+plotter.plot_average_profiles(dpi=int(args["--dpi"]), save_data=True)

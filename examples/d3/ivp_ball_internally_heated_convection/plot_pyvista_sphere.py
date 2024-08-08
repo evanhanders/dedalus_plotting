@@ -14,21 +14,42 @@ Options:
     --dpi=<int>              Image pixel density [default: 200]
     --radius=<float>         Outer radius of simulation domain [default: 1]
 """
+
 from docopt import docopt
+
 args = docopt(__doc__)
 from plotpal.volumes import PyVistaSpherePlotter
 
-root_dir    = args['--root_dir']
-data_dir    = args['--data_dir']
-out_name    = args['--out_name']
-start_fig   = int(args['--start_fig'])
-start_file  = int(args['--start_file'])
-radius      = float(args['--radius'])
-n_files     = args['--n_files']
+root_dir = args["--root_dir"]
+data_dir = args["--data_dir"]
+out_name = args["--out_name"]
+start_fig = int(args["--start_fig"])
+start_file = int(args["--start_file"])
+radius = float(args["--radius"])
+n_files = args["--n_files"]
 if n_files is not None:
     n_files = int(n_files)
 
-plotter = PyVistaSpherePlotter(root_dir, file_dir=data_dir, out_name=out_name, start_file=start_file, n_files=n_files)
+plotter = PyVistaSpherePlotter(
+    root_dir,
+    file_dir=data_dir,
+    out_name=out_name,
+    start_file=start_file,
+    n_files=n_files,
+)
 plotter.setup_grid(num_rows=1, num_cols=1, size=500)
-plotter.add_sphere(equator='T(equator)',left_meridian='T(phi=0)', right_meridian='T(phi=pi)', outer_shell='T(r=1)', view=0, cmap_exclusion=0.02, cmap='RdBu_r', label="T'", r_inner = 0, max_r = radius, remove_radial_mean=True, divide_radial_stdev=True)
+plotter.add_sphere(
+    equator="T(equator)",
+    left_meridian="T(phi=0)",
+    right_meridian="T(phi=pi)",
+    outer_shell="T(r=1)",
+    view=0,
+    cmap_exclusion=0.02,
+    cmap="RdBu_r",
+    label="T'",
+    r_inner=0,
+    max_r=radius,
+    remove_radial_mean=True,
+    divide_radial_stdev=True,
+)
 plotter.plot_spheres()
