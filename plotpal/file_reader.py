@@ -89,7 +89,7 @@ class FileReader:
         self.idle: dict[str, bool] = OrderedDict() # Whether or not this processor is idle for each file type
         self._distribute_writes(distribution, chunk_size=chunk_size)
 
-    def _distribute_writes(self, distribution: str, chunk_size=100) -> None:
+    def _distribute_writes(self, distribution: str, chunk_size: int = 100) -> None:
         """
         Distribute writes (or files) across MPI processes according to the specified rule.
 
@@ -208,7 +208,7 @@ class RollingFileReader(FileReader):
             chunk_size=chunk_size
         )
 
-    def _distribute_writes(self, distribution: str, chunk_size=100) -> None:
+    def _distribute_writes(self, distribution: str, chunk_size: int = 100) -> None:
         super()._distribute_writes(distribution=distribution, chunk_size=chunk_size)
         self.roll_starts, self.roll_counts = OrderedDict(), OrderedDict()
 
@@ -382,7 +382,7 @@ class SingleTypeReader():
     def get_dsets(
             self, 
             tasks: list[str], 
-            verbose=True
+            verbose: bool = True
             ) -> tuple[dict[str, Union[h5py.Dataset, RolledDset]], int]:
         """ Given a list of task strings, returns a dictionary of the associated datasets and the dset index of the current write. """
         if not self.idle:

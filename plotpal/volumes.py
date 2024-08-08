@@ -1,6 +1,7 @@
 from collections import OrderedDict
-from typing import Union, Optional, Callable
+from typing import Union, Optional
 from dataclasses import dataclass
+from typing_extensions import Unpack
 
 import h5py #type: ignore
 import numpy as np
@@ -375,7 +376,7 @@ class Box:
                             raise ImportError("PyVista must be installed for 3D pyvista plotting in plotpal")
                     grid = pv.StructuredGrid(x, y, z)
                     grid[self.label] = np.array(d['surfacecolor'].flatten(order='F'))
-                    mesh = pl.add_mesh(grid, scalars=self.label, cmap = self.cmap, clim = [vmin, vmax], scalar_bar_args={'color' : 'black'}, **plot_kwargs)
+                    mesh = pl.add_mesh(grid, scalars=self.label, cmap = self.cmap, clim = [vmin, vmax], scalar_bar_args={'color' : 'black'}, **plot_kwargs) #type: ignore
                     self.pv_grids.append((grid, mesh))
                 else:
                     #Update the pyvista grid and scalar map range..
@@ -419,8 +420,8 @@ class Box:
                 #TODO: implement azim and elem. currently at default azim=elev=45 ?
                 pl.camera.position = tuple(distance*np.array(pl.camera.position))
             if not self.first:
-                pl.update(force_redraw=True)
-                pl.update_scalar_bar_range([vmin, vmax], name=self.label)
+                pl.update(force_redraw=True) #type: ignore
+                pl.update_scalar_bar_range([vmin, vmax], name=self.label) #type: ignore
 
             self.first = False
         else:
@@ -689,13 +690,30 @@ class CutSphere:
                 grid = pv.StructuredGrid(x, y, z)
                 grid[label] = d['field'].flatten(order='F')
                 grid['mask'] = np.array(d['pick'], int).flatten(order='F')
-                clipped = grid.clip_scalar('mask', invert=False, value=0.5)
+                clipped = grid.clip_scalar('mask', invert=False, value=0.5) #type: ignore
                 d['grid'] = grid
                 d['clip'] = clipped
                 if i == 0:
-                    d['mesh'] = pl.add_mesh(d['clip'], scalars=label, cmap=cmap, clim=[self.vmin, self.vmax], opacity=1.0, show_scalar_bar=True, scalar_bar_args={'color' : 'black'}, **extra_kwargs)
+                    d['mesh'] = pl.add_mesh(
+                        d['clip'], 
+                        scalars=label, 
+                        cmap=cmap, 
+                        clim=[self.vmin, self.vmax], 
+                        opacity=1.0, 
+                        show_scalar_bar=True, 
+                        scalar_bar_args={'color' : 'black'}, 
+                        **extra_kwargs
+                        ) #type: ignore
                 else:
-                    d['mesh'] = pl.add_mesh(d['clip'], scalars=label, cmap=cmap, clim=[self.vmin, self.vmax], opacity=1.0, show_scalar_bar=False, **extra_kwargs)
+                    d['mesh'] = pl.add_mesh(
+                        d['clip'], 
+                        scalars=label, 
+                        cmap=cmap, 
+                        clim=[self.vmin, self.vmax], 
+                        opacity=1.0, 
+                        show_scalar_bar=False, 
+                        **extra_kwargs
+                        ) #type: ignore
             else:
                 #Just update the data after the first plot.
                 d['grid'][label] = d['field'].ravel(order='F')
@@ -703,7 +721,7 @@ class CutSphere:
                 d['mesh'].mapper.scalar_range = (self.vmin[0], self.vmax[0])
         
         if not self.first:
-            pl.update(force_redraw=True)
+            pl.update(force_redraw=True) #type: ignore
             #pl.update_scalar_bar_range([self.vmin[0], self.vmax[0]], name=self.label)
         self.first = False
 
@@ -729,7 +747,7 @@ class BoxPlotter(SingleTypeReader):
         """
         Initializes the box plotter.
         """
-        self.grid: Optional[Union[PlotGrid, PyVista3DPlotGrid]] = None
+        self.grid: Optional[PlotGrid] = None
         super(BoxPlotter, self).__init__(
             run_dir=run_dir,
             sub_dir=sub_dir,
@@ -744,15 +762,32 @@ class BoxPlotter(SingleTypeReader):
         self.counter = 0
         self.boxes: list[tuple[int, Box]] = []   
 
-    def setup_grid(self, *args, **kwargs) -> None:
+    def setup_grid(
+            self, 
+            num_rows: int = 1, 
+            num_cols: int = 1, 
+            col_inch: float = 3, 
+            row_inch: float = 3, 
+            pad_factor: float = 10
+            ) -> None:
         """ Initialize the plot grid for the colormeshes """
-        self.grid = RegularColorbarPlotGrid(*args, **kwargs, threeD=True)
+        self.grid = RegularColorbarPlotGrid( #type: ignore
+            num_rows=num_rows,
+            num_cols=num_cols,
+            polar=False,
+            mollweide=False,
+            orthographic=False,
+            col_inch=col_inch,
+            row_inch=row_inch,
+            pad_factor=pad_factor,
+            threeD=True
+        )
 
-    def add_box(self, *args, **kwargs) -> None:
+    def add_box(self, *args, **kwargs) -> None: #type: ignore
         self.boxes.append((self.counter, Box(*args, **kwargs)))
         self.counter += 1
     
-    def add_cutout_box(self, *args, **kwargs) -> None:
+    def add_cutout_box(self, *args, **kwargs) -> None: #type: ignore
         self.boxes.append((self.counter, Box(*args, **kwargs)))
         self.counter += 1
 
@@ -815,16 +850,54 @@ class BoxPlotter(SingleTypeReader):
                
                 self.grid.fig.savefig('{:s}/{:s}_{:06d}.png'.format(self.out_dir, self.out_name, int(time_data['write_number'][ni]+start_fig-1)), dpi=dpi, bbox_inches='tight')
 
-class PyVistaBoxPlotter(BoxPlotter):
+class PyVistaBoxPlotter(SingleTypeReader):
     """
     A class for plotting 3D boxes of dedalus data. Uses PyVista as a plotting engine rather than matplotlib.
     """
-            
-    def setup_grid(self, **kwargs):
-        """ Initialize the plot grid  """
-        self.grid = PyVista3DPlotGrid(**kwargs)
+
+    def __init__(
+            self, 
+            run_dir: str, 
+            sub_dir: str, 
+            out_name: str, 
+            distribution: str = 'even-write',
+            num_files: Optional[int] = None, 
+            roll_writes: Optional[int] = None,
+            start_file: int = 1,
+            global_comm: MPI.Intracomm = MPI.COMM_WORLD,
+            chunk_size: int = 1000
+            ):
+        """
+        Initializes the box plotter.
+        """
+        self.grid: Optional[PyVista3DPlotGrid] = None
+        super(PyVistaBoxPlotter, self).__init__(
+            run_dir=run_dir,
+            sub_dir=sub_dir,
+            out_name=out_name,
+            distribution=distribution,
+            num_files=num_files,
+            roll_writes=roll_writes,
+            start_file=start_file,
+            global_comm=global_comm,
+            chunk_size=chunk_size
+        )
+        self.counter = 0
+        self.boxes: list[tuple[int, Box]] = []   
+
+    def add_box(self, *args, **kwargs) -> None: #type: ignore
+        self.boxes.append((self.counter, Box(*args, **kwargs)))
+        self.counter += 1
     
-    def plot_boxes(self, start_fig: int = 1, extra_kwargs: dict = {}) -> None: #type: ignore
+    def add_cutout_box(self, *args, **kwargs) -> None: #type: ignore
+        self.boxes.append((self.counter, Box(*args, **kwargs)))
+        self.counter += 1
+            
+    def setup_grid(self, num_rows: int = 1, num_cols: int = 1, size: int = 500) -> None:
+        """ Initialize the plot grid  """
+        self.grid = PyVista3DPlotGrid(num_rows=num_rows, num_cols=num_cols, size=size)
+    
+    def plot_boxes(self, start_fig: int = 1, extra_kwargs: dict = {}) -> None:
         """
         Plot 3D renderings of 2D dedalus data slices at each timestep.
         """
@@ -857,25 +930,55 @@ class PyVistaBoxPlotter(BoxPlotter):
                     bx.plot_colormesh(dsets, ni, pl=self.grid.pl, engine='pyvista', plot_kwargs=extra_kwargs)
 
                 self.grid.change_focus_single(0)
-                titleactor = self.grid.pl.add_title('t={:.4e}'.format(time_data['sim_time'][ni]), color='black')
+                titleactor = self.grid.pl.add_title('t={:.4e}'.format(time_data['sim_time'][ni]), color='black') #type: ignore
                
                 self.grid.save('{:s}/{:s}_{:06d}.png'.format(self.out_dir, self.out_name, int(time_data['write_number'][ni]+start_fig-1)))
 
 
-class PyVistaSpherePlotter(PyVistaBoxPlotter):
+class PyVistaSpherePlotter(SingleTypeReader):
     """
     A class for plotting 3D spheres of dedalus data. Uses PyVista as a plotting engine.
     """
-    
-    def __init__(self, *args, **kwargs) -> None: #type: ignore
-        super().__init__(*args, **kwargs) #type: ignore
+
+    def __init__(
+            self, 
+            run_dir: str, 
+            sub_dir: str, 
+            out_name: str, 
+            distribution: str = 'even-write',
+            num_files: Optional[int] = None, 
+            roll_writes: Optional[int] = None,
+            start_file: int = 1,
+            global_comm: MPI.Intracomm = MPI.COMM_WORLD,
+            chunk_size: int = 1000
+            ):
+        """
+        Initializes the box plotter.
+        """
+        self.grid: Optional[PyVista3DPlotGrid] = None
+        super(PyVistaSpherePlotter, self).__init__(
+            run_dir=run_dir,
+            sub_dir=sub_dir,
+            out_name=out_name,
+            distribution=distribution,
+            num_files=num_files,
+            roll_writes=roll_writes,
+            start_file=start_file,
+            global_comm=global_comm,
+            chunk_size=chunk_size
+        )
+        self.counter = 0
         self.spheres: list[tuple[int, CutSphere]] = []
             
-    def add_sphere(self, *args, **kwargs) -> None:
+    def add_sphere(self, *args, **kwargs) -> None: #type: ignore
         self.spheres.append((self.counter, CutSphere(*args, **kwargs)))
         self.counter += 1
-
-    def plot_spheres(self, start_fig: int = 1, **kwargs):
+             
+    def setup_grid(self, num_rows: int = 1, num_cols: int = 1, size: int = 500) -> None:
+        """ Initialize the plot grid  """
+        self.grid = PyVista3DPlotGrid(num_rows=num_rows, num_cols=num_cols, size=size)
+    
+    def plot_spheres(self, start_fig: int = 1, plot_colormesh_kwargs: dict = {}) -> None:
         """
         Plot 3D renderings of 2D dedalus data slices at each timestep.
         """
@@ -898,7 +1001,7 @@ class PyVistaSpherePlotter(PyVistaBoxPlotter):
 
                 for k, sp in self.spheres:
                     self.grid.change_focus_single(k)
-                    sp.plot_colormesh(dsets, ni, pl=self.grid.pl, **kwargs)
+                    sp.plot_colormesh(dsets, ni, pl=self.grid.pl, **plot_colormesh_kwargs)
                 
                 self.grid.change_focus_single(0)
                 # titleactor = self.grid.pl.add_title('t={:.4e}'.format(time_data['sim_time'][ni]), color='black', font_size=self.grid.size*0.02)

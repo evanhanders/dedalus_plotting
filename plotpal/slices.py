@@ -214,7 +214,7 @@ class PolarColormesh(Colormesh):
     r_inner: float = 0
     r_outer: float = 1
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         self.x_basis = self.azimuth_basis
         self.y_basis = self.radial_basis
         self.r_pad = (self.r_inner, self.r_outer)
@@ -247,14 +247,14 @@ class PolarColormesh(Colormesh):
         ax.set_aspect(1)
         return plot, cb
 
-
+@dataclass
 class MollweideColormesh(Colormesh):
     """ Colormesh logic specific to Mollweide projections of S2 coordinates """
 
     colatitude_basis: str = 'theta'
     azimuth_basis: str = 'phi'
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         self.x_basis = self.azimuth_basis
         self.y_basis = self.colatitude_basis
 
@@ -278,7 +278,7 @@ class MollweideColormesh(Colormesh):
         ax.xaxis.set_major_formatter(plt.NullFormatter())
         return plot, cb
 
-
+@dataclass
 class OrthographicColormesh(Colormesh):
     """ Colormesh logic specific to Orthographic projections of S2 coordinates """
 
@@ -286,7 +286,7 @@ class OrthographicColormesh(Colormesh):
     colatitude_basis: str = 'theta'
     azimuth_basis: str = 'phi'
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         self.x_basis = self.azimuth_basis
         self.y_basis = self.colatitude_basis
         try:
@@ -315,7 +315,7 @@ class OrthographicColormesh(Colormesh):
         ax.gridlines()
         return plot, cb
 
-
+@dataclass
 class MeridionalColormesh(Colormesh):
     """ Colormesh logic specific to meridional slices in spherical coordinates """
 
@@ -325,7 +325,7 @@ class MeridionalColormesh(Colormesh):
     r_outer: float = 1
     left : bool = False
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         self.x_basis = self.colatitude_basis
         self.y_basis = self.radial_basis
         self.r_pad = (self.r_inner, self.r_outer)
@@ -412,7 +412,7 @@ class SlicePlotter(SingleTypeReader):
             pad_factor: float = 10
             ) -> None:
         """ Initialize the plot grid for the colormeshes """
-        self.grid = RegularColorbarPlotGrid(
+        self.grid = RegularColorbarPlotGrid( #type: ignore
             num_rows=num_rows,
             num_cols=num_cols,
             cbar=cbar,
@@ -429,69 +429,69 @@ class SlicePlotter(SingleTypeReader):
         """ Allows the user to use a custom grid """
         self.grid = custom_grid
 
-    def add_colormesh(self, *args, **kwargs) -> None:
-        self.colormeshes.append((self.counter, Colormesh(*args, **kwargs))) #type: ignore
+    def add_colormesh(self, *args, **kwargs) -> None: #type: ignore
+        self.colormeshes.append((self.counter, Colormesh(*args, **kwargs)))
         self.counter += 1
 
-    def add_cartesian_colormesh(self, *args, **kwargs) -> None:
-        self.colormeshes.append((self.counter, CartesianColormesh(*args, **kwargs))) #type: ignore
+    def add_cartesian_colormesh(self, *args, **kwargs) -> None: #type: ignore
+        self.colormeshes.append((self.counter, CartesianColormesh(*args, **kwargs)))
         self.counter += 1
 
-    def add_polar_colormesh(self, *args, **kwargs) -> None: 
-        self.colormeshes.append((self.counter, PolarColormesh(*args, **kwargs))) #type: ignore
+    def add_polar_colormesh(self, *args, **kwargs) -> None:  #type: ignore
+        self.colormeshes.append((self.counter, PolarColormesh(*args, **kwargs)))
         self.counter += 1
 
-    def add_mollweide_colormesh(self, *args, **kwargs) -> None:
-        self.colormeshes.append((self.counter, MollweideColormesh(*args, **kwargs))) #type: ignore
+    def add_mollweide_colormesh(self, *args, **kwargs) -> None: #type: ignore
+        self.colormeshes.append((self.counter, MollweideColormesh(*args, **kwargs)))
         self.counter += 1
 
-    def add_orthographic_colormesh(self, *args, **kwargs) -> None:
-        self.colormeshes.append((self.counter, OrthographicColormesh(*args, **kwargs))) #type: ignore
+    def add_orthographic_colormesh(self, *args, **kwargs) -> None: #type: ignore
+        self.colormeshes.append((self.counter, OrthographicColormesh(*args, **kwargs)))
         self.counter += 1
 
-    def add_meridional_colormesh(self, left_task: str, right_task: str, **kwargs) -> None:
+    def add_meridional_colormesh(self, left_task: str, right_task: str, **kwargs) -> None: #type: ignore
         """ Adds a colormesh for a meridional slice of a spherical field.
         Must specify both left and right sides of the meridional slice. """
         #TODO: be smarter about setting up the colorbars -- do it based on both sides rather than just left.
-        self.colormeshes.append((self.counter, MeridionalColormesh(left_task, left=True, **kwargs))) #type: ignore
-        self.colormeshes.append((self.counter, MeridionalColormesh(right_task, linked_cbar_cm=self.colormeshes[-1][1], linked_profile_cm=self.colormeshes[-1][1], **kwargs))) #type: ignore
+        self.colormeshes.append((self.counter, MeridionalColormesh(left_task, left=True, **kwargs)))
+        self.colormeshes.append((self.counter, MeridionalColormesh(right_task, linked_cbar_cm=self.colormeshes[-1][1], linked_profile_cm=self.colormeshes[-1][1], **kwargs)))
         self.counter += 1
 
-    def add_ball_shell_polar_colormesh(
+    def add_ball_shell_polar_colormesh( #type: ignore
             self, 
             ball_task: str, 
             shell_task: str, 
-            r_inner: Optional[float] = None, 
-            r_outer: Optional[float] = None, 
+            r_stitch: float, 
+            r_outer: float, 
             **kwargs
             ) -> None:
         """ Adds a colormesh for a polar / equatorial slice of a spherical field that spans a ball and a shell. """
         #TODO: fix how colorbar is set; currently set by the ball.
-        self.colormeshes.append((self.counter, PolarColormesh(ball_task, r_inner=0, r_outer=r_inner, **kwargs))) #type: ignore
-        self.colormeshes.append((self.counter, PolarColormesh(shell_task, r_inner=r_inner, r_outer=r_outer, linked_cbar_cm=self.colormeshes[-1][1], **kwargs))) #type: ignore
+        self.colormeshes.append((self.counter, PolarColormesh(ball_task, r_inner=0., r_outer=r_stitch, **kwargs)))
+        self.colormeshes.append((self.counter, PolarColormesh(shell_task, r_inner=r_stitch, r_outer=r_outer, linked_cbar_cm=self.colormeshes[-1][1], **kwargs)))
         self.counter += 1
 
-    def add_ball_shell_meridional_colormesh(
+    def add_ball_shell_meridional_colormesh( #type: ignore
             self, 
             ball_left_task: str, 
             ball_right_task: str,
             shell_left_task: str, 
             shell_right_task: str, 
-            r_stitch: Optional[float] = None, 
-            r_outer: Optional[float] = None, 
+            r_stitch: float, 
+            r_outer: float, 
             **kwargs
             ) -> None:
         """ Adds a colormesh for a meridional slice of a spherical field that spans a ball and a shell.
             Must specify both left and right sides of the meridional slice for both the ball and the shell."""
         #TODO: fix how colorbar is set; currently set by the left side of the ball.
-        self.colormeshes.append((self.counter, MeridionalColormesh(ball_left_task, left=True, r_inner=0, r_outer=r_stitch, **kwargs))) #type: ignore
+        self.colormeshes.append((self.counter, MeridionalColormesh(ball_left_task, left=True, r_inner=0., r_outer=r_stitch, **kwargs))) 
         first_cm = self.colormeshes[-1][1]
-        self.colormeshes.append((self.counter, MeridionalColormesh(ball_right_task, r_inner=0, r_outer=r_stitch, linked_cbar_cm=first_cm, linked_profile_cm=first_cm, **kwargs))) #type: ignore
-        self.colormeshes.append((self.counter, MeridionalColormesh(shell_left_task, left=True, r_inner=r_stitch, r_outer=r_outer, linked_cbar_cm=first_cm, **kwargs))) #type: ignore
-        self.colormeshes.append((self.counter, MeridionalColormesh(shell_right_task, r_inner=r_stitch, r_outer=r_outer, linked_cbar_cm=first_cm, linked_profile_cm=first_cm, **kwargs))) #type: ignore
+        self.colormeshes.append((self.counter, MeridionalColormesh(ball_right_task, r_inner=0., r_outer=r_stitch, linked_cbar_cm=first_cm, linked_profile_cm=first_cm, **kwargs)))
+        self.colormeshes.append((self.counter, MeridionalColormesh(shell_left_task, left=True, r_inner=r_stitch, r_outer=r_outer, linked_cbar_cm=first_cm, **kwargs)))
+        self.colormeshes.append((self.counter, MeridionalColormesh(shell_right_task, r_inner=r_stitch, r_outer=r_outer, linked_cbar_cm=first_cm, linked_profile_cm=first_cm, **kwargs)))
         self.counter += 1
 
-    def add_shell_shell_meridional_colormesh(
+    def add_shell_shell_meridional_colormesh( #type: ignore
             self, 
             left_inner_shell: str, 
             left_outer_shell: str,
@@ -504,15 +504,15 @@ class SlicePlotter(SingleTypeReader):
             ) -> None:
         """ Adds a colormesh for a meridional slice of a spherical field that spans two shells. 
             Must specify both left and right sides of the meridional slice for both shells."""
-        self.colormeshes.append((self.counter, MeridionalColormesh(left_inner_shell, left=True, r_inner=r_inner, r_outer=r_stitch, **kwargs))) #type: ignore
+        self.colormeshes.append((self.counter, MeridionalColormesh(left_inner_shell, left=True, r_inner=r_inner, r_outer=r_stitch, **kwargs)))
         first_cm = self.colormeshes[-1][1]
-        self.colormeshes.append((self.counter, MeridionalColormesh(right_inner_shell, r_inner=r_inner, r_outer=r_stitch, linked_cbar_cm=first_cm, linked_profile_cm=first_cm, **kwargs))) #type: ignore
-        self.colormeshes.append((self.counter, MeridionalColormesh(left_outer_shell, left=True, r_inner=r_stitch, r_outer=r_outer, linked_cbar_cm=first_cm, **kwargs))) #type: ignore
+        self.colormeshes.append((self.counter, MeridionalColormesh(right_inner_shell, r_inner=r_inner, r_outer=r_stitch, linked_cbar_cm=first_cm, linked_profile_cm=first_cm, **kwargs)))
+        self.colormeshes.append((self.counter, MeridionalColormesh(left_outer_shell, left=True, r_inner=r_stitch, r_outer=r_outer, linked_cbar_cm=first_cm, **kwargs)))
         outer_cm = self.colormeshes[-1][1]
-        self.colormeshes.append((self.counter, MeridionalColormesh(right_outer_shell, r_inner=r_stitch, r_outer=r_outer, linked_cbar_cm=first_cm, linked_profile_cm=outer_cm, **kwargs))) #type: ignore
+        self.colormeshes.append((self.counter, MeridionalColormesh(right_outer_shell, r_inner=r_stitch, r_outer=r_outer, linked_cbar_cm=first_cm, linked_profile_cm=outer_cm, **kwargs)))
         self.counter += 1
 
-    def add_ball_2shells_polar_colormesh(
+    def add_ball_2shells_polar_colormesh( #type: ignore
             self, 
             fields: tuple[str,str,str], 
             r_stitches: tuple[float,float], 
@@ -520,12 +520,12 @@ class SlicePlotter(SingleTypeReader):
             **kwargs
             ) -> None:
         """ Adds a colormesh for a polar / equatorial slice of a spherical field that spans a ball and two shells."""
-        self.colormeshes.append((self.counter, PolarColormesh(fields[0], r_inner=0, r_outer=r_stitches[0], **kwargs))) #type: ignore
-        self.colormeshes.append((self.counter, PolarColormesh(fields[1], r_inner=r_stitches[0], r_outer=r_stitches[1], linked_cbar_cm=self.colormeshes[-1][1], **kwargs))) #type: ignore
-        self.colormeshes.append((self.counter, PolarColormesh(fields[2], r_inner=r_stitches[1], r_outer=r_outer, linked_cbar_cm=self.colormeshes[-2][1], **kwargs)))    #type: ignore
+        self.colormeshes.append((self.counter, PolarColormesh(fields[0], r_inner=0, r_outer=r_stitches[0], **kwargs)))
+        self.colormeshes.append((self.counter, PolarColormesh(fields[1], r_inner=r_stitches[0], r_outer=r_stitches[1], linked_cbar_cm=self.colormeshes[-1][1], **kwargs)))
+        self.colormeshes.append((self.counter, PolarColormesh(fields[2], r_inner=r_stitches[1], r_outer=r_outer, linked_cbar_cm=self.colormeshes[-2][1], **kwargs)))
         self.counter += 1
 
-    def add_ball_2shells_meridional_colormesh(
+    def add_ball_2shells_meridional_colormesh( #type: ignore
             self, 
             left_fields: tuple[str,str,str], 
             right_fields: tuple[str,str,str],
@@ -535,13 +535,13 @@ class SlicePlotter(SingleTypeReader):
             ) -> None:
         """ Adds a colormesh for a meridional slice of a spherical field that spans a ball and two shells.
             Must specify both left and right sides of the meridional slice for the ball and both shells."""
-        self.colormeshes.append((self.counter, MeridionalColormesh(left_fields[0], left=True, r_inner=0, r_outer=r_stitches[0], **kwargs))) #type: ignore
+        self.colormeshes.append((self.counter, MeridionalColormesh(left_fields[0], left=True, r_inner=0, r_outer=r_stitches[0], **kwargs)))
         first_cm = self.colormeshes[-1][1]
-        self.colormeshes.append((self.counter, MeridionalColormesh(right_fields[0], left=False, r_inner=0, r_outer=r_stitches[0], linked_profile_cm=self.colormeshes[-1][1], linked_cbar_cm=first_cm, **kwargs))) #type: ignore
-        self.colormeshes.append((self.counter, MeridionalColormesh(left_fields[1], left=True, r_inner=r_stitches[0], r_outer=r_stitches[1], linked_cbar_cm=first_cm, **kwargs))) #type: ignore
-        self.colormeshes.append((self.counter, MeridionalColormesh(right_fields[1], left=False, r_inner=r_stitches[0], r_outer=r_stitches[1], linked_profile_cm=self.colormeshes[-1][1], linked_cbar_cm=first_cm, **kwargs))) #type: ignore
-        self.colormeshes.append((self.counter, MeridionalColormesh(left_fields[2], left=True, r_inner=r_stitches[1], r_outer=r_outer, linked_cbar_cm=first_cm, **kwargs))) #type: ignore
-        self.colormeshes.append((self.counter, MeridionalColormesh(right_fields[2], left=False, r_inner=r_stitches[1], r_outer=r_outer, linked_profile_cm=self.colormeshes[-1][1], linked_cbar_cm=first_cm, **kwargs))) #type: ignore
+        self.colormeshes.append((self.counter, MeridionalColormesh(right_fields[0], left=False, r_inner=0, r_outer=r_stitches[0], linked_profile_cm=self.colormeshes[-1][1], linked_cbar_cm=first_cm, **kwargs)))
+        self.colormeshes.append((self.counter, MeridionalColormesh(left_fields[1], left=True, r_inner=r_stitches[0], r_outer=r_stitches[1], linked_cbar_cm=first_cm, **kwargs)))
+        self.colormeshes.append((self.counter, MeridionalColormesh(right_fields[1], left=False, r_inner=r_stitches[0], r_outer=r_stitches[1], linked_profile_cm=self.colormeshes[-1][1], linked_cbar_cm=first_cm, **kwargs)))
+        self.colormeshes.append((self.counter, MeridionalColormesh(left_fields[2], left=True, r_inner=r_stitches[1], r_outer=r_outer, linked_cbar_cm=first_cm, **kwargs)))
+        self.colormeshes.append((self.counter, MeridionalColormesh(right_fields[2], left=False, r_inner=r_stitches[1], r_outer=r_outer, linked_profile_cm=self.colormeshes[-1][1], linked_cbar_cm=first_cm, **kwargs)))
         self.counter += 1
 
     def _groom_grid(self) -> tuple[list[matplotlib.axes.Axes], list[matplotlib.axes.Axes]]:
@@ -556,17 +556,14 @@ class SlicePlotter(SingleTypeReader):
                     caxs.append(self.grid.cbar_axes[k])
         return axs, caxs
 
-    def plot_colormeshes(self, start_fig: int = 1, dpi: int = 200, **mpl_kwargs):
+    def plot_colormeshes(self, start_fig: int = 1, dpi: int = 200, mpl_kwargs: dict = {}) -> None:
         """
         Plot figures of the 2D dedalus data slices at each timestep.
 
         # Arguments
-            start_fig (int) :
-                The number in the filename for the first write.
-            dpi (int) :
-                The pixel density of the output image
-            kwargs :
-                extra keyword args for matplotlib.pyplot.pcolormesh
+            start_fig (int) : The number in the filename for the first write.
+            dpi (int) : The pixel density of the output image
+            mpl_kwargs : extra keyword args for matplotlib.pyplot.pcolormesh
         """
         with self.my_sync:
             assert self.grid is not None, "Must set up a grid before plotting"

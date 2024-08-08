@@ -33,7 +33,7 @@ if n_files is not None:
 radius = float(args['--radius'])
 
 # Create Plotter object, tell it which fields to plot
-plotter = SlicePlotter(root_dir, file_dir=data_dir, out_name=out_name, start_file=start_file, n_files=n_files)
+plotter = SlicePlotter(root_dir, sub_dir=data_dir, out_name=out_name, start_file=start_file, num_files=n_files)
 plotter_kwargs = { 'col_inch' : int(args['--col_inch']), 'row_inch' : int(args['--row_inch']), 'pad_factor' : 10 }
 
 # remove_x_mean option removes the (numpy horizontal mean) over phi
