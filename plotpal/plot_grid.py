@@ -86,6 +86,7 @@ class PlotGrid:
         """Generates the subplots."""
 
         # If the user oopsied on their specs and added a subplot that goes off the grid, fix it.
+        # TODO: Make this fail gracefully instead.
         for spec in self.specs:
             row_ceil = int(np.ceil(spec["row_num"] + spec["row_span"]))
             col_ceil = int(np.ceil(spec["col_num"] + spec["col_span"]))

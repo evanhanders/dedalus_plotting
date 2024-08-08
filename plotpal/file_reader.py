@@ -10,6 +10,7 @@ from dedalus.tools import post  # type: ignore
 from dedalus.tools.general import natural_sort  # type: ignore
 from dedalus.tools.parallel import Sync  # type: ignore
 from mpi4py import MPI
+from tqdm import tqdm
 
 logger = logging.getLogger(__name__.split(".")[-1])
 
@@ -402,6 +403,8 @@ class SingleTypeReader:
             self.current_file_number: Optional[int] = None
             self.current_file_name: Optional[str] = None
 
+        self.pbar: Optional[tqdm] = None
+
     def writes_remain(self) -> bool:
         """
         Increments to the next write on the local MPI process.
@@ -446,12 +449,18 @@ class SingleTypeReader:
         """Given a list of task strings, returns a dictionary of the associated datasets and the dset index of the current write."""
         if not self.idle:
             if self.comm.rank == 0 and verbose:
-                print(
+                if self.pbar is None:
+                    self.pbar = tqdm(total=self.writes)
+                self.pbar.update(1)
+                self.pbar.set_description(
                     "gathering {} tasks; write {}/{} on process 0".format(
                         tasks, self.current_write + 1, self.writes
                     )
                 )
                 stdout.flush()
+                if self.pbar.n == self.writes:
+                    self.pbar.close()
+                    self.pbar = None
 
             assert self.current_file_handle is not None, ValueError(
                 "No file handle found."
