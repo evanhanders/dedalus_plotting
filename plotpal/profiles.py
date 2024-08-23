@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__.split(".")[-1])
 
 
 def save_dim_scale(
-    dim: h5py._hl.dims.DimensionProxy,
+    dim: h5py.AttributeManager,
     scale_group: h5py.Group,
     task_name: str,
     scale_name: str,

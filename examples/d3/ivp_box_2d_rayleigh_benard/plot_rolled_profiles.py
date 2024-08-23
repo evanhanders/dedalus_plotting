@@ -37,12 +37,12 @@ roll_writes = int(
 
 # Create Plotter object, tell it which fields to plot
 plotter = RolledProfilePlotter(
-    root_dir,
-    file_dir=data_dir,
+    run_dir=root_dir,
+    sub_dir=data_dir,
     out_name=subdir_name,
     roll_writes=roll_writes,
     start_file=start_file,
-    n_files=n_files,
+    num_files=n_files,
 )
 plotter.setup_grid(
     num_rows=2,

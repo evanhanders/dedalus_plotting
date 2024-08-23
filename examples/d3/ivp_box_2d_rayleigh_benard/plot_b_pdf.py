@@ -47,11 +47,11 @@ pdfs_to_plot = [
     "b",
 ]
 plotter = PdfPlotter(
-    root_dir,
-    file_dir=data_dir,
+    run_dir=root_dir,
+    sub_dir=data_dir,
     out_name=out_name,
     start_file=start_file,
-    n_files=n_files,
+    num_files=n_files,
 )
 plotter.calculate_pdfs(
     pdfs_to_plot, bins=bins, threeD=threeD, bases=bases, uneven_basis="z"
