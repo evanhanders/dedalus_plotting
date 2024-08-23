@@ -214,7 +214,7 @@ class ScalarPlotter(SingleTypeReader):
             fig_name : default name of the output figure (if not specified in the ScalarFigure object)
         """
         with self.my_sync:
-            if self.trace_data is None:
+            if len(self.trace_data.keys()) == 0:
                 self._read_fields()
             self._clear_figures()
             if self.idle:
