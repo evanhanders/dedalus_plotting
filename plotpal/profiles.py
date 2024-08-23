@@ -147,8 +147,8 @@ class AveragedProfilePlotter(SingleTypeReader):
                 write_number = int(
                     dsets[task].dims[0]["write_number"][ni] / self.writes_per_avg
                 )
-                if self.comm.rank == 0:
-                    print(
+                if self.comm.rank == 0 and self.pbar is not None:
+                    self.pbar.write(
                         "writing average profiles; plot number {}".format(write_number)
                     )
                     stdout.flush()
@@ -348,7 +348,7 @@ class RolledProfilePlotter(SingleTypeReader):
         grid_num: int,
         needed_tasks: Optional[list[str]] = None,
         ylim: tuple[Optional[float], Optional[float]] = (None, None),
-        mpl_kwargs: dict = {},
+        mpl_kwargs: Optional[dict] = None,
     ) -> None:
         """
         Specifies a profile to plot rolled averages of.
@@ -366,6 +366,8 @@ class RolledProfilePlotter(SingleTypeReader):
             ylim (optional) :  Y-limits for the plot
             mpl_kwargs : Keyword arguments to pass to the matplotlib.pyplot.plot function
         """
+        if mpl_kwargs is None:
+            mpl_kwargs = {}
         if "color" not in mpl_kwargs and "c" not in mpl_kwargs:
             mpl_kwargs["color"] = "C" + str(self.color_ind)
             self.color_ind += 1
@@ -382,6 +384,7 @@ class RolledProfilePlotter(SingleTypeReader):
             mpl_kwargs=mpl_kwargs,
         )
         self.lines.append(line)
+        del mpl_kwargs
 
     def plot_lines(
         self, start_fig: int = 1, dpi: int = 200, save_profiles: bool = False

@@ -33,12 +33,12 @@ if n_files is not None:
 
 # Create Plotter object, tell it which fields to plot
 plotter = AveragedProfilePlotter(
-    root_dir,
-    writes_per_avg=writes_per_avg,
-    file_dir=data_dir,
+    run_dir=root_dir,
+    chunk_size=writes_per_avg,
+    sub_dir=data_dir,
     out_name=subdir_name,
     start_file=start_file,
-    n_files=n_files,
+    num_files=n_files,
 )
 plotter_kwargs = {
     "fig_width": int(args["--fig_width"]),

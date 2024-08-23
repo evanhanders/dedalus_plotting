@@ -36,7 +36,7 @@ radius = float(args["--radius"])
 
 # Create Plotter object, tell it which fields to plot
 plotter = SlicePlotter(
-    root_dir,
+    run_dir=root_dir,
     sub_dir=data_dir,
     out_name=out_name,
     start_file=start_file,

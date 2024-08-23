@@ -40,6 +40,9 @@ class Colormesh:
         "z"  # The dedalus basis name that the profile spans in the vertical-direction of the plot
     )
     cmap: str = "RdBu_r"  # The matplotlib colormap name used to display the data
+    transform: Optional[matplotlib.transforms.Transform] = (
+        None  # The transform to apply to the data
+    )
     label: Optional[str] = None  # A text label for the colorbar
     remove_mean: bool = (
         False  # If True, remove the mean value of the profile at each time
@@ -248,6 +251,7 @@ class Colormesh:
             cmap=self.cmap,
             vmin=vmin,
             vmax=vmax,
+            transform=self.transform,
             **mpl_kwargs,
         )
         cb = self._setup_colorbar(self.color_plot, cax, vmin, vmax)
