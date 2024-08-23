@@ -12,7 +12,7 @@ mpirun -n 2 python3 parallel_profile_operation.py
 
 making an image like this:
 
-[Enstrophy traces](./example_figs/enstrophy_v_time.png)
+![Enstrophy traces](./example_figs/enstrophy_v_time.png)
 
 # uniform_output_task.py
 
@@ -24,5 +24,5 @@ mpirun -n 2 python3 uniform_output_task.py
 
 making a very minimal image like this that you can then modify:
 
-[A simple colormesh](./example_figs/frames_000479.png)
+![A simple colormesh](./example_figs/frames_000479.png)
 
