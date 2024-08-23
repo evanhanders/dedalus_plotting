@@ -51,7 +51,11 @@ if n_files is not None:
     n_files = int(n_files)
 
 reader = SingleTypeReader(
-    root_dir, data_dir, out_dir, n_files=n_files, distribution="even-write"
+    run_dir=root_dir,
+    sub_dir=data_dir,
+    out_name=out_dir,
+    num_files=n_files,
+    distribution="even-write",
 )
 output_tasks = ["enstrophy"]  # TODO: Update this with the names of your output tasks.
 
