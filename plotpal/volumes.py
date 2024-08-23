@@ -639,7 +639,7 @@ class CutSphere:
             [
                 vmin,
             ]
-        ), np.ndarray(
+        ), np.array(
             [
                 vmax,
             ]

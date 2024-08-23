@@ -37,11 +37,11 @@ radius = float(args["--radius"])
 
 # Create Plotter object, tell it which fields to plot
 plotter = SlicePlotter(
-    root_dir,
-    file_dir=data_dir,
+    run_dir=root_dir,
+    sub_dir=data_dir,
     out_name=out_name,
     start_file=start_file,
-    n_files=n_files,
+    num_files=n_files,
 )
 plotter_kwargs = {
     "col_inch": int(args["--col_inch"]),
@@ -53,8 +53,8 @@ plotter_kwargs = {
 # divide_x_std divides the radial mean(abs(T mer left)) over the phi direction
 plotter.setup_grid(num_cols=1, num_rows=1, polar=True, **plotter_kwargs)
 plotter.add_meridional_colormesh(
-    left="T(phi=pi)",
-    right="T(phi=0)",
+    left_task="T(phi=pi)",
+    right_task="T(phi=0)",
     colatitude_basis="theta",
     radial_basis="r",
     remove_x_mean=False,

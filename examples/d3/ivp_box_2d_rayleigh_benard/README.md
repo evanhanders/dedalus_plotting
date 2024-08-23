@@ -1,6 +1,14 @@
 # 2D Rayleigh Benard Convection
 
-This example problem is lifted directly from the dedalus repository. The types of plots you can make with plotpal are shown below:
+This example problem is lifted directly from the dedalus repository. 
+
+First run the simulation:
+
+```sh
+python rayleigh_benard.py
+```
+
+Then the types of plots you can make with plotpal are shown below:
 
 # 2D slices
 
@@ -68,4 +76,4 @@ python3 plot_scalar_traces.py
 
 Producing images like the one below:
 
-![A trace of Nu and Re](./plot_scalar_traces.py)
+![A trace of Nu and Re](./example_figs/fundamentals.png)

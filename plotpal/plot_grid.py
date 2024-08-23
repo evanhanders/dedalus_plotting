@@ -69,7 +69,9 @@ class PlotGrid:
         if mollweide:
             subplot_kwargs["projection"] = "mollweide"
         elif orthographic:
-            subplot_kwargs["projection"] = ccrs.Orthographic(180, 45)
+            subplot_kwargs["projection"] = ccrs.Orthographic(
+                central_longitude=180, central_latitude=45
+            )
         elif threeD:
             subplot_kwargs["projection"] = "3d"
 
