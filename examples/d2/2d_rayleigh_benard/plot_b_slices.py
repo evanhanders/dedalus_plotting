@@ -36,11 +36,11 @@ if n_files is not None:
 
 # Create Plotter object, tell it which fields to plot
 plotter = SlicePlotter(
-    root_dir,
-    file_dir=data_dir,
+    run_dir=root_dir,
+    sub_dir=data_dir,
     out_name=out_name,
     start_file=start_file,
-    n_files=n_files,
+    num_files=n_files,
 )
 plotter_kwargs = {
     "col_inch": float(args["--col_inch"]),

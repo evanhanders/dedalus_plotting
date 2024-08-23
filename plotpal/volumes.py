@@ -1068,7 +1068,12 @@ class BoxPlotter(SingleTypeReader):
                     ax = axs[k]
                     cax = caxs[k]
                     bx.plot_colormesh(
-                        dsets, ni, ax=ax, cax=cax, plot_kwargs=extra_kwargs
+                        dsets,
+                        ni,
+                        ax=ax,
+                        cax=cax,
+                        plot_kwargs=extra_kwargs,
+                        engine="matplotlib",
                     )
 
                 plt.suptitle("t = {:.4e}".format(time_data["sim_time"][ni]))
