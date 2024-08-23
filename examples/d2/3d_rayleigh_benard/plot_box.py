@@ -34,11 +34,11 @@ if n_files is not None:
     n_files = int(n_files)
 
 plotter = BoxPlotter(
-    root_dir,
-    file_dir=data_dir,
+    run_dir=root_dir,
+    sub_dir=data_dir,
     out_name=out_name,
     start_file=start_file,
-    n_files=n_files,
+    num_files=n_files,
 )
 plotter.setup_grid(num_rows=1, num_cols=2)
 plotter.add_box(

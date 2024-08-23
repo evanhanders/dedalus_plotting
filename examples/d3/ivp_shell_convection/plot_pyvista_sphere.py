@@ -31,17 +31,23 @@ if n_files is not None:
     n_files = int(n_files)
 
 plotter = PyVistaSpherePlotter(
-    root_dir,
-    file_dir=data_dir,
+    run_dir=root_dir,
+    sub_dir=data_dir,
     out_name=out_name,
     start_file=start_file,
-    n_files=n_files,
+    num_files=n_files,
 )
 plotter.setup_grid(num_rows=1, num_cols=1, size=900)
 plotter.add_sphere(
-    equator="flux(equator)",
-    left_meridian="flux_phi_start",
-    right_meridian="flux_phi_end",
+    equator=[
+        "flux(equator)",
+    ],
+    left_meridian=[
+        "flux_phi_start",
+    ],
+    right_meridian=[
+        "flux_phi_end",
+    ],
     inner_shell="flux_r_inner",
     outer_shell="flux_r_outer",
     view=0,

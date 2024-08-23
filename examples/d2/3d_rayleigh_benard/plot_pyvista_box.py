@@ -35,11 +35,11 @@ if n_files is not None:
 size = int(args["--size"])
 
 plotter = PyVistaBoxPlotter(
-    root_dir,
-    file_dir=data_dir,
+    run_dir=root_dir,
+    sub_dir=data_dir,
     out_name=out_name,
     start_file=start_file,
-    n_files=n_files,
+    num_files=n_files,
 )
 plotter.setup_grid(num_rows=2, num_cols=2, size=size)
 plotter.add_box(
@@ -96,4 +96,4 @@ plotter.add_cutout_box(
     label="Buoyancy Fluc",
     remove_x_mean=True,
 )
-plotter.plot_boxes(distance=1.05)
+plotter.plot_boxes()

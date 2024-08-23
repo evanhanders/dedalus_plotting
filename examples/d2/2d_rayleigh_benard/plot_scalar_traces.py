@@ -36,17 +36,17 @@ figs = []
 
 # Nu vs time
 fig1 = ScalarFigure(num_rows=2, num_cols=1, col_inch=6, fig_name="fundamentals")
-fig1.add_field(0, "Re", color="orange")
-fig1.add_field(1, "Nu", color="indigo")
+fig1.add_field(0, "Re", extra_kwargs={"color": "orange"})
+fig1.add_field(1, "Nu", extra_kwargs={"color": "indigo"})
 figs.append(fig1)
 
 # Load in figures and make plots
 plotter = ScalarPlotter(
-    root_dir,
-    file_dir=data_dir,
+    run_dir=root_dir,
+    sub_dir=data_dir,
     out_name=out_name,
     start_file=start_file,
-    n_files=n_files,
+    num_files=n_files,
     roll_writes=roll_writes,
 )
 plotter.load_figures(figs)
